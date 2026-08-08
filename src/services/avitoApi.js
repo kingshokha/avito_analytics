@@ -270,12 +270,10 @@ export const fetchAvitoDeliveryOrders = async () => {
   // Deduplicate fetched orders by ID or Track Number
   const ordersMap = {};
 
-  // First add manual saved orders
   manualSaved.forEach(o => {
     if (o && o.id) ordersMap[o.id] = o;
   });
 
-  // Then add fetched API orders
   fetchedOrders.forEach(o => {
     if (!o) return;
     const realId = `del-${o.id || o.order_id || o.tracking_number}`;
@@ -351,7 +349,7 @@ function parseItemMetrics(stRaw) {
   return { impressions, views, contacts, favorites, spend, daily };
 }
 
-// Safe Single-Query Data Fetcher with Token Caching & Throttling
+// Data Fetcher including Active + Sold/Archived Items Title Resolution
 export const fetchDashboardData = async (period = '30', forceDemo = false) => {
   const creds = getStoredCredentials();
   
@@ -367,7 +365,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
 
     try {
       console.log('Безопасный запрос данных через Avito API...');
-      const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
+      const token = await fetchAccessToken(creds.clientId, clientSecret);
       rawDebugInfo.tokenAcquired = true;
       
       // Step 1: Get current user profile
@@ -383,22 +381,48 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
 
       await sleep(250);
 
-      // Step 2: Single, clean query to GET /core/v1/items
+      // Step 2: Fetch both Active AND Sold/Archived items to resolve all titles
       let allDiscovered = [];
+
+      // Query 2A: Active items
       try {
-        const res = await fetch('/avito-api/core/v1/items?per_page=100', {
+        const resActive = await fetch('/avito-api/core/v1/items?per_page=100', {
           headers: { Authorization: `Bearer ${token}` }
         });
-        if (res.ok) {
-          const data = await res.json();
-          rawDebugInfo.itemsResponse = data;
-          allDiscovered = extractItemsFromPayload(data);
-        } else {
-          rawDebugInfo.itemsResponse = { error: await res.text(), status: res.status };
+        if (resActive.ok) {
+          const dataActive = await resActive.json();
+          rawDebugInfo.itemsResponse = dataActive;
+          allDiscovered = allDiscovered.concat(extractItemsFromPayload(dataActive));
         }
       } catch (e) {}
 
-      // Deduplicate discovered items
+      await sleep(200);
+
+      // Query 2B: Sold / Archived items (status=old)
+      try {
+        const resOld = await fetch('/avito-api/core/v1/items?status=old&per_page=100', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (resOld.ok) {
+          const dataOld = await resOld.json();
+          allDiscovered = allDiscovered.concat(extractItemsFromPayload(dataOld));
+        }
+      } catch (e) {}
+
+      await sleep(200);
+
+      // Query 2C: Removed/blocked items (status=removed)
+      try {
+        const resRemoved = await fetch('/avito-api/core/v1/items?status=removed&per_page=100', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (resRemoved.ok) {
+          const dataRemoved = await resRemoved.json();
+          allDiscovered = allDiscovered.concat(extractItemsFromPayload(dataRemoved));
+        }
+      } catch (e) {}
+
+      // Map items by ID
       const itemsMapById = {};
       allDiscovered.forEach(it => {
         if (!it) return;
@@ -425,9 +449,25 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         .map(id => Number(String(id).replace(/\D/g, '')))
         .filter(n => !isNaN(n) && n > 0);
 
-      // Store only active valid item IDs in cache
-      if (targetItemIds.length > 0) {
-        localStorage.setItem(DISCOVERED_ITEMS_KEY, JSON.stringify(targetItemIds));
+      // Single item detail lookup for any remaining target items lacking titles
+      for (const id of targetItemIds) {
+        if (!itemsMapById[id] || !itemsMapById[id].title) {
+          try {
+            await sleep(150);
+            const itemRes = await fetch(`/avito-api/core/v1/items/${id}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (itemRes.ok) {
+              const singleData = await itemRes.json();
+              if (singleData && (singleData.title || singleData.id)) {
+                itemsMapById[id] = {
+                  ...singleData,
+                  id
+                };
+              }
+            }
+          } catch (e) {}
+        }
       }
 
       // Calculate date range (YYYY-MM-DD)
@@ -475,7 +515,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       }
 
-      // Process and render items with strict filtering against empty/archived ghosts
+      // Process and render ALL items (Active + Sold + Archived) with titles resolved
       if (targetItemIds.length > 0) {
         let allDailySeries = [];
 
@@ -488,20 +528,13 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             allDailySeries = allDailySeries.concat(daily);
           }
 
-          const hasRealTitle = Boolean(foundRaw && foundRaw.title);
-          const hasMetrics = (views > 0 || contacts > 0 || spend > 0 || impressions > 0);
-
-          // If no title AND zero metrics, this is a ghost deleted/archived item
-          if (!hasRealTitle && !hasMetrics) {
-            return null;
-          }
-
-          const isArchived = foundRaw?.status === 'old' || foundRaw?.status === 'removed' || foundRaw?.status === 'blocked' || !hasRealTitle;
+          const isSoldOrArchived = foundRaw?.status === 'old' || foundRaw?.status === 'removed' || foundRaw?.status === 'blocked';
+          const titleText = foundRaw?.title || (isSoldOrArchived ? `Проданный товар #${id}` : `Объявление #${id}`);
 
           return {
             id: `av-${id}`,
-            title: foundRaw?.title || `[Архив] Объявление #${id}`,
-            category: foundRaw?.category?.name || (isArchived ? 'Архив' : 'Товары / Сервисы'),
+            title: titleText,
+            category: foundRaw?.category?.name || (isSoldOrArchived ? 'Архив / Продано' : 'Товары / Сервисы'),
             price: foundRaw?.price ? `${foundRaw.price.toLocaleString('ru-RU')} ₽` : '—',
             impressions: impressions || Math.round((views || 0) * 3.8),
             views: views || 0,
@@ -509,17 +542,17 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             favorites: favorites || 0,
             spend: spend || Number(foundRaw?.spend ?? foundRaw?.expenses ?? 0),
             ctr: (views > 0) ? `${((contacts / views) * 100).toFixed(1)}%` : '0%',
-            status: isArchived ? (foundRaw?.status || 'old') : (foundRaw?.status || 'active'),
-            service: spend > 0 ? 'Платная услуга Авито' : 'Без продвижения',
+            status: isSoldOrArchived ? (foundRaw?.status || 'old') : (foundRaw?.status || 'active'),
+            service: isSoldOrArchived ? 'Продано' : (spend > 0 ? 'Платная услуга Авито' : 'Без продвижения'),
             img: foundRaw?.url || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=150&auto=format&fit=crop&q=80'
           };
-        }).filter(Boolean); // Filter out null ghost items
+        });
 
         const res = processRealItemsAndStats(processedItems, allDailySeries, userInfo, period);
         return {
           ...res,
           rawDebugInfo,
-          apiNotice: `Синхронизация успешна. Активных объявлений в таблице: ${processedItems.length}.`
+          apiNotice: `Синхронизация успешна. Обработано объявлений (активных и проданных): ${processedItems.length}.`
         };
       } else {
         const mock = generateMockData(period);
@@ -777,7 +810,7 @@ function generateMockData(period = '30') {
       favorites: { value: totalFavorites, trend: '+9.1%', isPositive: true },
       spend: { value: `${totalSpend.toLocaleString('ru-RU')} ₽`, trend: '-4.8%', isPositive: true },
       cpl: { value: `${cpl} ₽`, trend: '-12.0%', isPositive: true },
-      roi: { value: `${roi}%`, trend: '+22.4%', isPositive: true }
+      roi: { value: totalSpend > 0 ? `${Math.round(((totalContacts * 3000 - totalSpend) / totalSpend) * 100)}%` : '0%', trend: 'Авто-синхронизация', isPositive: true }
     },
     dailyStats,
     items,

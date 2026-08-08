@@ -3,7 +3,7 @@ import { Search, Filter, ArrowUpDown, ExternalLink, Zap, Archive, CheckCircle2 }
 
 export default function ItemsTable({ items }) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('active'); // 'all', 'active', 'archived'
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'active', 'archived'
   const [sortField, setSortField] = useState('contacts');
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -51,7 +51,7 @@ export default function ItemsTable({ items }) {
             Эффективность Объявлений
           </h3>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Статистика просмотров, контактов и затрат по вашим позициям
+            Статистика просмотров, контактов и затрат по всем позициям (активным и проданным)
           </p>
         </div>
 
@@ -59,9 +59,9 @@ export default function ItemsTable({ items }) {
           {/* Status Filter Pipeline Tabs */}
           <div style={{ display: 'flex', gap: '6px', background: 'rgba(15, 23, 42, 0.6)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
             {[
+              { id: 'all', label: 'Все объявления' },
               { id: 'active', label: 'Активные' },
-              { id: 'archived', label: 'В архиве / Снятые' },
-              { id: 'all', label: 'Все объявления' }
+              { id: 'archived', label: 'Проданные / Архив' }
             ].map(f => (
               <button
                 key={f.id}
@@ -127,9 +127,7 @@ export default function ItemsTable({ items }) {
             {filteredItems.length === 0 ? (
               <tr>
                 <td colSpan={7} style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
-                  {statusFilter === 'archived' 
-                    ? 'В архиве пока нет сохраненных или снятых объявлений.' 
-                    : 'Объявлений по данному фильтру не найдено.'}
+                  Объявлений по данному фильтру не найдено.
                 </td>
               </tr>
             ) : (
@@ -166,7 +164,7 @@ export default function ItemsTable({ items }) {
                       {isArchived ? (
                         <span className="status-badge" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171' }}>
                           <Archive size={10} style={{ display: 'inline', marginRight: '4px' }} />
-                          Снято / Архив
+                          Продано / Архив
                         </span>
                       ) : (
                         <span className={`status-badge ${item.service.includes('X10') ? 'promo' : 'active'}`}>
