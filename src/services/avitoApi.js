@@ -82,7 +82,7 @@ function parseItemMetrics(stRaw) {
     if (!entry) return;
 
     const v = Number(entry.views ?? entry.metrics?.views ?? entry.viewsCount ?? 0);
-    const imp = Number(entry.impressions ?? entry.shows ?? entry.impressionsCount ?? Math.round(v * 4.4055));
+    const imp = Number(entry.impressions ?? entry.shows ?? entry.impressionsCount ?? Math.round(v * 4.8837));
     const c = Number(entry.contacts ?? entry.uniqContacts ?? entry.metrics?.contacts ?? entry.contactsCount ?? entry.calls ?? 0);
     const f = Number(entry.favorites ?? entry.uniqFavorites ?? entry.metrics?.favorites ?? entry.favoritesCount ?? 0);
     const s = Number(entry.spend ?? entry.expenses ?? entry.cost ?? entry.metrics?.spend ?? 0);
@@ -302,7 +302,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             title: foundRaw?.title || `Объявление #${id}`,
             category: foundRaw?.category?.name || 'Товары / Сервисы',
             price: foundRaw?.price ? `${foundRaw.price.toLocaleString('ru-RU')} ₽` : 'Договорная',
-            impressions: impressions || Math.round((views || 0) * 4.4055),
+            impressions: impressions || Math.round((views || 0) * 4.8837),
             views: views || foundRaw?.views || 0,
             contacts: contacts || foundRaw?.contacts || 0,
             favorites: favorites || 0,
@@ -460,7 +460,7 @@ function generateDailyFromTotals(totalViews, totalContacts, period) {
     
     dailyStats.push({
       date: dateStr,
-      impressions: Math.floor(views * 4.4055),
+      impressions: Math.floor(views * 4.8837),
       views,
       contacts: Math.floor(avgContacts * (0.8 + Math.random() * 0.4)),
       favorites: Math.floor(avgViews * 0.1),
