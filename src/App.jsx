@@ -5,6 +5,8 @@ import MetricsOverview from './components/MetricsOverview';
 import AnalyticsCharts from './components/AnalyticsCharts';
 import ItemsTable from './components/ItemsTable';
 import CampaignsView from './components/CampaignsView';
+import ChatsView from './components/ChatsView';
+import DeliveryView from './components/DeliveryView';
 import ApiSettingsModal from './components/ApiSettingsModal';
 import { fetchDashboardData, getStoredCredentials } from './services/avitoApi';
 import { AlertCircle, CheckCircle, Info, Loader2, Bug, ChevronDown, ChevronUp } from 'lucide-react';
@@ -107,6 +109,14 @@ export default function App() {
 
               {activeTab === 'items' && dashboardData && (
                 <ItemsTable items={dashboardData.items} />
+              )}
+
+              {activeTab === 'chats' && (
+                <ChatsView />
+              )}
+
+              {activeTab === 'delivery' && (
+                <DeliveryView />
               )}
 
               {activeTab === 'campaigns' && dashboardData && (

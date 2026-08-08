@@ -1,10 +1,12 @@
 import React from 'react';
-import { LayoutDashboard, ShoppingBag, TrendingUp, Settings, HelpCircle, ShieldCheck, Zap } from 'lucide-react';
+import { LayoutDashboard, ShoppingBag, TrendingUp, MessageSquare, Truck, Settings, Zap } from 'lucide-react';
 
 export default function Sidebar({ activeTab, setActiveTab, apiStatus, onOpenSettings }) {
   const menuItems = [
     { id: 'overview', label: 'Обзор и KPI', icon: LayoutDashboard },
     { id: 'items', label: 'Мои Объявления', icon: ShoppingBag },
+    { id: 'chats', label: 'Сообщения & CRM', icon: MessageSquare, badge: '3' },
+    { id: 'delivery', label: 'Авито Доставка', icon: Truck, badge: '2' },
     { id: 'campaigns', label: 'Кампании и ROI', icon: TrendingUp },
     { id: 'settings', label: 'Интеграция API', icon: Settings }
   ];
@@ -22,14 +24,30 @@ export default function Sidebar({ activeTab, setActiveTab, apiStatus, onOpenSett
       <nav className="nav-menu">
         {menuItems.map((item) => {
           const IconComponent = item.icon;
+          const isActive = activeTab === item.id;
           return (
             <button
               key={item.id}
-              className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
+              className={`nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setActiveTab(item.id)}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
             >
-              <IconComponent />
-              <span>{item.label}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <IconComponent />
+                <span>{item.label}</span>
+              </div>
+              {item.badge && (
+                <span style={{
+                  background: item.id === 'chats' ? '#ef4444' : 'var(--primary-avito)',
+                  color: '#ffffff',
+                  fontSize: '10px',
+                  fontWeight: '800',
+                  padding: '2px 7px',
+                  borderRadius: '10px'
+                }}>
+                  {item.badge}
+                </span>
+              )}
             </button>
           );
         })}
