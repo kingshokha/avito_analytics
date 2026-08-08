@@ -3,7 +3,8 @@ import { Search, Filter, ArrowUpDown, ExternalLink, Zap } from 'lucide-react';
 
 export default function ItemsTable({ items }) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortField, setSortField] = useState('contacts');
+  // Default sorting: Newest items first (numericId descending)
+  const [sortField, setSortField] = useState('numericId');
   const [sortAsc, setSortAsc] = useState(false);
 
   if (!items) return null;
@@ -26,7 +27,10 @@ export default function ItemsTable({ items }) {
       let valA = a[sortField];
       let valB = b[sortField];
       
-      if (typeof valA === 'string' && valA.includes('₽')) {
+      if (sortField === 'price') {
+        valA = a.rawPrice !== undefined ? a.rawPrice : (typeof a.price === 'string' && a.price.includes('₽') ? parseInt(a.price.replace(/\D/g, ''), 10) : 0);
+        valB = b.rawPrice !== undefined ? b.rawPrice : (typeof b.price === 'string' && b.price.includes('₽') ? parseInt(b.price.replace(/\D/g, ''), 10) : 0);
+      } else if (typeof valA === 'string' && valA.includes('₽')) {
         valA = parseInt(valA.replace(/\D/g, ''), 10);
         valB = parseInt(valB.replace(/\D/g, ''), 10);
       }
@@ -44,7 +48,7 @@ export default function ItemsTable({ items }) {
             Эффективность Объявлений
           </h3>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Статистика по активным и продвигаемым позициям на Авито
+            Статистика по активным и продвигаемым позициям на Авито (по умолчанию сначала новые)
           </p>
         </div>
 
@@ -63,7 +67,11 @@ export default function ItemsTable({ items }) {
         <table className="custom-table">
           <thead>
             <tr>
-              <th>Объявление</th>
+              <th onClick={() => handleSort('numericId')} style={{ cursor: 'pointer' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  Объявление <ArrowUpDown size={12} />
+                </div>
+              </th>
               <th onClick={() => handleSort('price')} style={{ cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   Актуальная Цена <ArrowUpDown size={12} />
@@ -102,7 +110,12 @@ export default function ItemsTable({ items }) {
                 </td>
                 <td>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span style={{ fontWeight: '700', color: 'var(--text-main)' }}>{item.price}</span>
+                    <span style={{
+                      fontWeight: '700',
+                      color: item.price === 'Бесплатно' ? '#10b981' : 'var(--text-main)'
+                    }}>
+                      {item.price}
+                    </span>
                     {item.hasDiscount && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
                         <s style={{ fontSize: '11px', color: '#64748b' }}>{item.oldPrice}</s>
