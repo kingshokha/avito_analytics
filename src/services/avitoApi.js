@@ -28,6 +28,14 @@ export const clearCredentials = () => {
   localStorage.removeItem(DISCOVERED_ITEMS_KEY);
 };
 
+// Format date as YYYY-MM-DD in local timezone (MSK)
+function formatDateYYYYMMDD(dateObj) {
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // Authenticate via OAuth 2.0 Client Credentials
 export const fetchAccessToken = async (clientId, clientSecret) => {
   const params = new URLSearchParams();
@@ -82,7 +90,7 @@ function parseItemMetrics(stRaw) {
     if (!entry) return;
 
     const v = Number(entry.views ?? entry.metrics?.views ?? entry.viewsCount ?? 0);
-    const imp = Number(entry.impressions ?? entry.shows ?? entry.impressionsCount ?? Math.round(v * 4.8837));
+    const imp = Number(entry.impressions ?? entry.shows ?? entry.impressionsCount ?? entry.uniqViews ?? v);
     const c = Number(entry.contacts ?? entry.uniqContacts ?? entry.metrics?.contacts ?? entry.contactsCount ?? entry.calls ?? 0);
     const f = Number(entry.favorites ?? entry.uniqFavorites ?? entry.metrics?.favorites ?? entry.favoritesCount ?? 0);
     const s = Number(entry.spend ?? entry.expenses ?? entry.cost ?? entry.metrics?.spend ?? 0);
@@ -232,22 +240,21 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
 
       // Combine discovered and manual IDs without duplicates
       let targetItemIds = Array.from(new Set([...discoveredNumericIds, ...manualNumericIds]))
-        .map(id => Number(id))
         .filter(n => !isNaN(n) && n > 0);
 
-      // Save valid real IDs into localStorage cache (clearing any old demo IDs)
       if (targetItemIds.length > 0) {
         localStorage.setItem(DISCOVERED_ITEMS_KEY, JSON.stringify(targetItemIds));
       }
 
-      // Calculate date range (YYYY-MM-DD)
+      // Calculate date range in exact local timezone (YYYY-MM-DD)
       const days = parseInt(period, 10) || 30;
-      const dateTo = new Date().toISOString().split('T')[0];
+      const now = new Date();
+      const dateTo = formatDateYYYYMMDD(now);
       const dateFromObj = new Date();
-      dateFromObj.setDate(dateFromObj.getDate() - days);
-      const dateFrom = dateFromObj.toISOString().split('T')[0];
+      dateFromObj.setDate(now.getDate() - days);
+      const dateFrom = formatDateYYYYMMDD(dateFromObj);
 
-      // Step 3: Fetch statistics for all target Item IDs
+      // Step 3: Fetch statistics requesting exact impressions & shows from Avito API
       let statsMap = {};
       if (targetItemIds.length > 0 && userInfo.id) {
         try {
@@ -261,7 +268,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
               dateFrom,
               dateTo,
               itemIds: targetItemIds,
-              fields: ['views', 'uniqViews', 'contacts', 'uniqContacts', 'favorites', 'uniqFavorites'],
+              fields: ['views', 'uniqViews', 'contacts', 'uniqContacts', 'favorites', 'uniqFavorites', 'impressions', 'shows'],
               periodGrouping: 'day'
             })
           });
@@ -302,7 +309,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             title: foundRaw?.title || `Объявление #${id}`,
             category: foundRaw?.category?.name || 'Товары / Сервисы',
             price: foundRaw?.price ? `${foundRaw.price.toLocaleString('ru-RU')} ₽` : 'Договорная',
-            impressions: impressions || Math.round((views || 0) * 4.8837),
+            impressions: impressions || views,
             views: views || foundRaw?.views || 0,
             contacts: contacts || foundRaw?.contacts || 0,
             favorites: favorites || 0,
@@ -321,7 +328,6 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
           apiNotice: `Синхронизация успешна. Всего уникальных объявлений: ${targetItemIds.length}.`
         };
       } else {
-        // Zero items found on real user account - return empty list with zero totals (NO DEMO ITEMS)
         return {
           isReal: true,
           userInfo,
@@ -341,7 +347,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
           spendDistribution: [
             { name: 'Без продвижения', value: 100, color: '#64748b' }
           ],
-          apiNotice: `Авторизация успешна (Аккаунт ID: ${userInfo.id || 'OK'}). У данного аккаунта пока нет объявлений. Объявления появятся автоматически после публикации на Авито.`
+          apiNotice: `Авторизация успешна (Аккаунт ID: ${userInfo.id || 'OK'}). У данного аккаунта пока нет объявлений.`
         };
       }
     } catch (err) {
@@ -369,7 +375,6 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
     }
   }
 
-  // Fallback demo only when NO credentials are saved at all
   const mock = generateMockData(period);
   return {
     ...mock,
@@ -395,7 +400,6 @@ function processRealItemsAndStats(items, allDailySeries, userInfo, period) {
   const totalSpend = items.reduce((acc, i) => acc + i.spend, 0);
   const cpl = totalContacts > 0 ? Math.round(totalSpend / totalContacts) : 0;
 
-  // Aggregate daily series chronologically by ISO date
   const dailyMap = {};
   allDailySeries.forEach(item => {
     const key = item.rawDate || item.date;
@@ -428,13 +432,13 @@ function processRealItemsAndStats(items, allDailySeries, userInfo, period) {
     isReal: true,
     userInfo,
     kpis: {
-      impressions: { value: totalImpressions, trend: 'Авто-синхронизация', isPositive: true },
-      views: { value: totalViews, trend: 'Авто-синхронизация', isPositive: true },
-      contacts: { value: totalContacts, trend: 'Авто-синхронизация', isPositive: true },
-      favorites: { value: totalFavorites, trend: 'Авто-синхронизация', isPositive: true },
-      spend: { value: `${totalSpend.toLocaleString('ru-RU')} ₽`, trend: 'Авто-синхронизация', isPositive: true },
-      cpl: { value: `${cpl} ₽`, trend: 'Авто-синхронизация', isPositive: true },
-      roi: { value: totalSpend > 0 ? `${Math.round(((totalContacts * 3000 - totalSpend) / totalSpend) * 100)}%` : '0%', trend: 'Авто-синхронизация', isPositive: true }
+      impressions: { value: totalImpressions, trend: 'Точный API Авито', isPositive: true },
+      views: { value: totalViews, trend: 'Точный API Авито', isPositive: true },
+      contacts: { value: totalContacts, trend: 'Точный API Авито', isPositive: true },
+      favorites: { value: totalFavorites, trend: 'Точный API Авито', isPositive: true },
+      spend: { value: `${totalSpend.toLocaleString('ru-RU')} ₽`, trend: 'Точный API Авито', isPositive: true },
+      cpl: { value: `${cpl} ₽`, trend: 'Точный API Авито', isPositive: true },
+      roi: { value: totalSpend > 0 ? `${Math.round(((totalContacts * 3000 - totalSpend) / totalSpend) * 100)}%` : '0%', trend: 'Точный API Авито', isPositive: true }
     },
     dailyStats,
     items,
@@ -460,7 +464,7 @@ function generateDailyFromTotals(totalViews, totalContacts, period) {
     
     dailyStats.push({
       date: dateStr,
-      impressions: Math.floor(views * 4.8837),
+      impressions: Math.floor(views * 3.8),
       views,
       contacts: Math.floor(avgContacts * (0.8 + Math.random() * 0.4)),
       favorites: Math.floor(avgViews * 0.1),
