@@ -64,70 +64,46 @@ function extractItemsFromPayload(data) {
   return [];
 }
 
-// Helper function to parse actual prices with discounts according to Swagger schema
-export function parseItemPriceDetails(raw, vasRaw) {
+// Helper function to parse item price directly from GET /core/v1/items according to Swagger schema
+export function parseItemPriceDetails(raw) {
   if (!raw) return { price: 0, formatted: 'Договорная', oldPrice: null, hasDiscount: false, discountPercent: 0 };
 
-  let basePrice = null;
-  let discountedPrice = null;
+  let currentPrice = null;
   let oldPrice = null;
 
-  // Extract base price
+  // Swagger schema specifies price as integer (e.g., 35000) or null in GET /core/v1/items
   if (typeof raw.price === 'number') {
-    basePrice = raw.price;
+    currentPrice = raw.price;
   } else if (typeof raw.price === 'string' && raw.price.trim() !== '') {
     const num = Number(raw.price.replace(/\D/g, ''));
-    if (!isNaN(num)) basePrice = num;
+    if (!isNaN(num)) currentPrice = num;
   } else if (typeof raw.price === 'object' && raw.price !== null) {
-    basePrice = raw.price.value ?? raw.price.price ?? raw.price.current ?? raw.price.main ?? null;
+    currentPrice = raw.price.value ?? raw.price.price ?? raw.price.current ?? null;
     oldPrice = raw.price.old ?? raw.price.old_price ?? raw.price.original ?? null;
   }
 
-  // Look for discount prices in any nested/top-level field returned by Avito API
-  discountedPrice = raw.price_with_discount ?? 
-                    raw.discount_price ?? 
-                    raw.priceDiscount ?? 
-                    raw.price_discount ?? 
-                    raw.discountPrice ?? 
-                    raw.discount?.price ?? 
-                    raw.price?.discount ?? 
-                    raw.priceDetails?.price ?? 
-                    raw.priceDetails?.discount_price ?? 
-                    null;
-
-  oldPrice = oldPrice ?? 
-             raw.old_price ?? 
-             raw.price_old ?? 
-             raw.original_price ?? 
-             raw.priceOriginal ?? 
-             raw.priceDetails?.old_price ?? 
-             raw.priceDetails?.price_old ?? 
-             null;
-
-  // Check if vasRaw (from /core/v1/accounts/{user_id}/vas/prices endpoint) has discount info
-  if (vasRaw && Array.isArray(vasRaw.vas) && vasRaw.vas.length > 0) {
-    const vasDiscount = vasRaw.vas.find(v => v.priceOld && v.priceOld > v.price);
-    if (vasDiscount) {
-      discountedPrice = vasDiscount.price;
-      oldPrice = vasDiscount.priceOld;
-    }
+  // Check top-level item discount fields if any exist on the item listing
+  if (raw.price_with_discount || raw.discount_price) {
+    currentPrice = raw.price_with_discount || raw.discount_price;
+    oldPrice = raw.price || raw.old_price;
+  } else if (raw.old_price) {
+    oldPrice = raw.old_price;
   }
 
-  let finalCurrent = discountedPrice !== null ? Number(discountedPrice) : (basePrice !== null ? Number(basePrice) : 0);
-  let finalOld = oldPrice !== null ? Number(oldPrice) : (discountedPrice !== null && basePrice !== null && basePrice > discountedPrice ? Number(basePrice) : null);
-
-  if (finalCurrent === 0) {
+  if (currentPrice === null || currentPrice === undefined || currentPrice === 0) {
     return { price: 0, formatted: 'Договорная', oldPrice: null, hasDiscount: false, discountPercent: 0 };
   }
 
-  const hasDiscount = Boolean(finalOld && finalOld > finalCurrent);
+  const numCurrent = Number(currentPrice);
+  const numOld = oldPrice !== null ? Number(oldPrice) : null;
+  const hasDiscount = Boolean(numOld && numOld > numCurrent);
 
   return {
-    price: finalCurrent,
-    formatted: `${finalCurrent.toLocaleString('ru-RU')} ₽`,
-    oldPrice: hasDiscount ? `${finalOld.toLocaleString('ru-RU')} ₽` : null,
+    price: numCurrent,
+    formatted: `${numCurrent.toLocaleString('ru-RU')} ₽`,
+    oldPrice: hasDiscount ? `${numOld.toLocaleString('ru-RU')} ₽` : null,
     hasDiscount,
-    discountPercent: hasDiscount ? Math.round(((finalOld - finalCurrent) / finalOld) * 100) : 0
+    discountPercent: hasDiscount ? Math.round(((numOld - numCurrent) / numOld) * 100) : 0
   };
 }
 
@@ -264,9 +240,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
               allDiscovered = allDiscovered.concat(autoList.map(it => ({
                 id: it.avito_id || it.itemId || it.id || it.item_id,
                 title: it.title || `Объявление #${it.avito_id || it.id}`,
-                price: it.price,
-                price_with_discount: it.price_with_discount,
-                old_price: it.old_price
+                price: it.price
               })));
             }
           }
@@ -353,7 +327,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       }
 
-      // Step 4: Fetch VAS prices & discounts (POST /core/v1/accounts/{userId}/vas/prices according to Swagger schema)
+      // Step 4: Fetch VAS prices & promotional service discounts (POST /core/v1/accounts/{userId}/vas/prices)
       let vasPricesMap = {};
       if (targetItemIds.length > 0 && userInfo.id) {
         try {
@@ -388,10 +362,20 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
           const stRaw = statsMap[id];
           const vasRaw = vasPricesMap[id];
           const { impressions, views, contacts, favorites, spend, daily } = parseItemMetrics(stRaw);
-          const priceInfo = parseItemPriceDetails(foundRaw, vasRaw);
+          const priceInfo = parseItemPriceDetails(foundRaw);
           
           if (daily.length > 0) {
             allDailySeries = allDailySeries.concat(daily);
+          }
+
+          // Inspect VAS promotion discounts available for this item
+          let vasPromoNotice = null;
+          if (vasRaw && Array.isArray(vasRaw.vas)) {
+            const discountedVas = vasRaw.vas.find(v => v.priceOld && v.priceOld > v.price);
+            if (discountedVas) {
+              const saveAmount = discountedVas.priceOld - discountedVas.price;
+              vasPromoNotice = `Скидка на ${discountedVas.slug}: ${discountedVas.price} ₽ (вместо ${discountedVas.priceOld} ₽, экономия ${saveAmount} ₽)`;
+            }
           }
 
           return {
@@ -411,6 +395,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             ctr: (views > 0) ? `${((contacts / views) * 100).toFixed(1)}%` : '0%',
             status: foundRaw?.status || 'active',
             service: spend > 0 ? 'Платная услуга Авито' : 'Без продвижения',
+            vasPromoNotice,
             img: foundRaw?.url || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=150&auto=format&fit=crop&q=80'
           };
         });
@@ -619,9 +604,9 @@ function generateMockData(period = '30') {
       title: 'iPhone 15 Pro Max 256GB Titanium',
       category: 'Электроника',
       price: '114 990 ₽',
-      oldPrice: '135 000 ₽',
-      hasDiscount: true,
-      discountPercent: 15,
+      oldPrice: null,
+      hasDiscount: false,
+      discountPercent: 0,
       impressions: 4800,
       views: 1420,
       contacts: 118,
@@ -670,9 +655,9 @@ function generateMockData(period = '30') {
       title: 'Беспроводные наушники Sony WH-1000XM5',
       category: 'Электроника',
       price: '28 500 ₽',
-      oldPrice: '32 000 ₽',
-      hasDiscount: true,
-      discountPercent: 11,
+      oldPrice: null,
+      hasDiscount: false,
+      discountPercent: 0,
       impressions: 2100,
       views: 640,
       contacts: 42,
