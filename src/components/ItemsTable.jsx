@@ -8,7 +8,9 @@ const STATUS_MAP = {
   blocked: { label: 'Заблокировано', color: '#fbbf24', bg: 'rgba(245, 158, 11, 0.15)', icon: Ban },
   rejected: { label: 'Отклонено', color: '#f87171', bg: 'rgba(239, 68, 68, 0.15)', icon: AlertCircle },
   draft: { label: 'Черновик', color: '#c084fc', bg: 'rgba(139, 92, 246, 0.15)', icon: FileText },
-  unpublished: { label: 'Неопубликовано', color: '#94a3b8', bg: 'rgba(100, 116, 139, 0.15)', icon: FileText }
+  unpublished: { label: 'Неопубликовано', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.15)', icon: FileText },
+  deactivated: { label: 'Неактивно', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.15)', icon: FileText },
+  inactive: { label: 'Неактивно', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.15)', icon: FileText }
 };
 
 export default function ItemsTable({ items }) {
@@ -28,6 +30,16 @@ export default function ItemsTable({ items }) {
     }
   };
 
+  // Calculate status counts
+  const counts = {
+    all: items.length,
+    active: items.filter(i => i.status === 'active' || i.status === 'promo').length,
+    old: items.filter(i => i.status === 'old' || i.status === 'archive').length,
+    draft: items.filter(i => ['draft', 'unpublished', 'deactivated', 'inactive', 'not_published'].includes(i.status)).length,
+    removed: items.filter(i => i.status === 'removed').length,
+    blocked: items.filter(i => i.status === 'blocked' || i.status === 'rejected').length
+  };
+
   const filteredItems = items
     .filter(item => {
       // Search filter
@@ -37,9 +49,9 @@ export default function ItemsTable({ items }) {
       // Status tab filter
       if (statusFilter === 'all') return matchesSearch;
       if (statusFilter === 'active') return matchesSearch && (item.status === 'active' || item.status === 'promo');
-      if (statusFilter === 'old') return matchesSearch && item.status === 'old';
+      if (statusFilter === 'old') return matchesSearch && (item.status === 'old' || item.status === 'archive');
       if (statusFilter === 'removed') return matchesSearch && item.status === 'removed';
-      if (statusFilter === 'draft') return matchesSearch && (item.status === 'draft' || item.status === 'unpublished');
+      if (statusFilter === 'draft') return matchesSearch && ['draft', 'unpublished', 'deactivated', 'inactive', 'not_published'].includes(item.status);
       if (statusFilter === 'blocked') return matchesSearch && (item.status === 'blocked' || item.status === 'rejected');
       
       return matchesSearch;
@@ -84,12 +96,12 @@ export default function ItemsTable({ items }) {
   };
 
   const statusTabs = [
-    { id: 'all', label: 'Все' },
-    { id: 'active', label: '🟢 Активные' },
-    { id: 'old', label: '⚪ Архив' },
-    { id: 'draft', label: '🟣 Черновики & Неопубликованные' },
-    { id: 'removed', label: '🔴 Удаленные' },
-    { id: 'blocked', label: '🟠 Блок & Отклоненные' }
+    { id: 'all', label: `Все (${counts.all})` },
+    { id: 'active', label: `🟢 Активные (${counts.active})` },
+    { id: 'draft', label: `🟣 Неопубликованные (${counts.draft})` },
+    { id: 'old', label: `⚪ Архив (${counts.old})` },
+    { id: 'removed', label: `🔴 Удаленные (${counts.removed})` },
+    { id: 'blocked', label: `🟠 Блок (${counts.blocked})` }
   ];
 
   return (
@@ -115,7 +127,7 @@ export default function ItemsTable({ items }) {
         </div>
       </div>
 
-      {/* Avito Status Category Filter Tabs */}
+      {/* Avito Status Category Filter Tabs with Item Counts */}
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px', paddingBottom: '14px', borderBottom: '1px solid var(--border-color)' }}>
         {statusTabs.map(t => (
           <button
@@ -130,7 +142,8 @@ export default function ItemsTable({ items }) {
               fontSize: '12px',
               fontWeight: '600',
               cursor: 'pointer',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              boxShadow: statusFilter === t.id ? '0 0 10px rgba(0, 170, 142, 0.2)' : 'none'
             }}
           >
             {t.label}
