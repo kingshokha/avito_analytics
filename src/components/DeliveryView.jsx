@@ -1,78 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, RefreshCw, Loader2 } from 'lucide-react';
+import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, RefreshCw, Loader2, Inbox } from 'lucide-react';
 import { fetchAvitoDeliveryOrders } from '../services/avitoApi';
 
 export default function DeliveryView() {
-  const [orders, setOrders] = useState([
-    {
-      id: 'del-90182',
-      trackNumber: 'AV-88492019',
-      buyer: 'Игорь Васильев',
-      city: 'Санкт-Петербург',
-      itemTitle: 'iPhone 15 Pro Max 256GB Titanium',
-      itemPrice: '114 990 ₽',
-      payoutAmount: 111540,
-      feeAmount: 3450,
-      carrier: 'СДЭК',
-      carrierColor: '#10b981',
-      status: 'in_transit',
-      statusText: 'В пути в город назначения',
-      eta: 'Завтра, до 18:00',
-      date: '08 авг 2026'
-    },
-    {
-      id: 'del-88102',
-      trackNumber: 'AV-77391024',
-      buyer: 'Мария Семенова',
-      city: 'Екатеринбург',
-      itemTitle: 'Беспроводные наушники Sony WH-1000XM5',
-      itemPrice: '28 500 ₽',
-      payoutAmount: 27075,
-      feeAmount: 1425,
-      carrier: 'Почта России',
-      carrierColor: '#3b82f6',
-      status: 'ready_for_pickup',
-      statusText: 'Ожидает в пункте выдачи',
-      eta: 'Готов к выдаче (до 14 авг)',
-      date: '06 авг 2026'
-    },
-    {
-      id: 'del-77194',
-      trackNumber: 'AV-66291048',
-      buyer: 'Константин Рыбаков',
-      city: 'Казань',
-      itemTitle: 'Офисный стол Лофт из массива дуба',
-      itemPrice: '34 000 ₽',
-      payoutAmount: 32300,
-      feeAmount: 1700,
-      carrier: 'Boxberry',
-      carrierColor: '#ec4899',
-      status: 'completed',
-      statusText: 'Завершен и Выплачен',
-      eta: 'Получен покупателем',
-      date: '03 авг 2026'
-    },
-    {
-      id: 'del-66105',
-      trackNumber: 'AV-55102938',
-      buyer: 'Анна Кузнецова',
-      city: 'Новосибирск',
-      itemTitle: 'Игровой ПК Core i7 13700KF / RTX 4080',
-      itemPrice: '189 000 ₽',
-      payoutAmount: 183330,
-      feeAmount: 5670,
-      carrier: 'Avito Exmail',
-      carrierColor: '#00aa8e',
-      status: 'in_transit',
-      statusText: 'Передан в курьерскую службу',
-      eta: '11 авг 2026',
-      date: '08 авг 2026'
-    }
-  ]);
-
+  const [orders, setOrders] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const loadRealDelivery = async () => {
     setIsLoading(true);
@@ -80,9 +14,12 @@ export default function DeliveryView() {
       const real = await fetchAvitoDeliveryOrders();
       if (real && real.length > 0) {
         setOrders(real);
+      } else {
+        setOrders([]);
       }
     } catch (e) {
       console.error(e);
+      setOrders([]);
     } finally {
       setIsLoading(false);
     }
@@ -100,10 +37,10 @@ export default function DeliveryView() {
     .reduce((sum, o) => sum + o.payoutAmount, 0);
 
   const filteredOrders = orders.filter(o => {
-    const matchesSearch = o.buyer.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          o.trackNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          o.itemTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          o.city.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = (o.buyer || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (o.trackNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (o.itemTitle || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (o.city || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' ? true : o.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -199,7 +136,7 @@ export default function DeliveryView() {
                 style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
                 title="Обновить список доставок"
               >
-                {isLoading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+                <RefreshCw size={14} />
               </button>
             </h3>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -247,68 +184,97 @@ export default function DeliveryView() {
           </div>
         </div>
 
-        {/* Detailed Delivery Orders Table */}
-        <div style={{ overflowX: 'auto' }}>
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Товар и Трек-код</th>
-                <th>Покупатель / Город</th>
-                <th>Служба Доставки</th>
-                <th>Сумма сделки</th>
-                <th>К выплате</th>
-                <th>Статус Доставки</th>
-                <th>Срок доставки</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredOrders.map(o => (
-                <tr key={o.id}>
-                  <td>
-                    <div>
-                      <div className="item-title">{o.itemTitle}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--primary-avito)', fontFamily: 'monospace', fontWeight: '700', marginTop: '2px' }}>
-                        {o.trackNumber}
-                      </div>
-                    </div>
-                  </td>
-                  <td>
-                    <div style={{ fontWeight: '600', color: 'var(--text-main)' }}>{o.buyer}</div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{o.city}</div>
-                  </td>
-                  <td>
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '4px 10px',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      fontWeight: '700',
-                      background: `${o.carrierColor}15`,
-                      color: o.carrierColor,
-                      border: `1px solid ${o.carrierColor}30`
-                    }}>
-                      <Truck size={12} />
-                      {o.carrier}
-                    </span>
-                  </td>
-                  <td style={{ fontWeight: '700' }}>{o.itemPrice}</td>
-                  <td>
-                    <span style={{ fontWeight: '700', color: '#10b981' }}>
-                      {o.payoutAmount.toLocaleString('ru-RU')} ₽
-                    </span>
-                    <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-dim)' }}>
-                      Комиссия: {o.feeAmount} ₽
-                    </span>
-                  </td>
-                  <td>{getStatusBadge(o.status, o.statusText)}</td>
-                  <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{o.eta}</td>
+        {/* Detailed Delivery Orders Table / Empty State */}
+        {isLoading ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', gap: '16px' }}>
+            <Loader2 className="animate-spin" size={32} color="var(--primary-avito)" />
+            <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Загрузка заказов Авито Доставки...</span>
+          </div>
+        ) : filteredOrders.length === 0 ? (
+          <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+            <div style={{
+              width: '56px',
+              height: '56px',
+              borderRadius: '16px',
+              background: 'rgba(59, 130, 246, 0.12)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 16px auto',
+              color: '#3b82f6'
+            }}>
+              <Truck size={28} />
+            </div>
+            <h4 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-main)', marginBottom: '6px' }}>
+              У вас пока нет заказов с Авито Доставкой
+            </h4>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', maxWidth: '480px', margin: '0 auto' }}>
+              Когда покупатели оформят заказ через Авито Доставку, статус отправки, трек-код и сумма зачисления появятся в этой таблице.
+            </p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="custom-table">
+              <thead>
+                <tr>
+                  <th>Товар и Трек-код</th>
+                  <th>Покупатель / Город</th>
+                  <th>Служба Доставки</th>
+                  <th>Сумма сделки</th>
+                  <th>К выплате</th>
+                  <th>Статус Доставки</th>
+                  <th>Срок доставки</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filteredOrders.map(o => (
+                  <tr key={o.id}>
+                    <td>
+                      <div>
+                        <div className="item-title">{o.itemTitle}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--primary-avito)', fontFamily: 'monospace', fontWeight: '700', marginTop: '2px' }}>
+                          {o.trackNumber}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: '600', color: 'var(--text-main)' }}>{o.buyer}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{o.city}</div>
+                    </td>
+                    <td>
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        background: `${o.carrierColor}15`,
+                        color: o.carrierColor,
+                        border: `1px solid ${o.carrierColor}30`
+                      }}>
+                        <Truck size={12} />
+                        {o.carrier}
+                      </span>
+                    </td>
+                    <td style={{ fontWeight: '700' }}>{o.itemPrice}</td>
+                    <td>
+                      <span style={{ fontWeight: '700', color: '#10b981' }}>
+                        {o.payoutAmount.toLocaleString('ru-RU')} ₽
+                      </span>
+                      <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-dim)' }}>
+                        Комиссия: {o.feeAmount} ₽
+                      </span>
+                    </td>
+                    <td>{getStatusBadge(o.status, o.statusText)}</td>
+                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{o.eta}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

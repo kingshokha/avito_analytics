@@ -5,8 +5,8 @@ export default function Sidebar({ activeTab, setActiveTab, apiStatus, onOpenSett
   const menuItems = [
     { id: 'overview', label: 'Обзор и KPI', icon: LayoutDashboard },
     { id: 'items', label: 'Мои Объявления', icon: ShoppingBag },
-    { id: 'chats', label: 'Сообщения & CRM', icon: MessageSquare, badge: '3' },
-    { id: 'delivery', label: 'Авито Доставка', icon: Truck, badge: '2' },
+    { id: 'chats', label: 'Сообщения & CRM', icon: MessageSquare },
+    { id: 'delivery', label: 'Авито Доставка', icon: Truck },
     { id: 'campaigns', label: 'Кампании и ROI', icon: TrendingUp },
     { id: 'settings', label: 'Интеграция API', icon: Settings }
   ];
@@ -36,18 +36,6 @@ export default function Sidebar({ activeTab, setActiveTab, apiStatus, onOpenSett
                 <IconComponent />
                 <span>{item.label}</span>
               </div>
-              {item.badge && (
-                <span style={{
-                  background: item.id === 'chats' ? '#ef4444' : 'var(--primary-avito)',
-                  color: '#ffffff',
-                  fontSize: '10px',
-                  fontWeight: '800',
-                  padding: '2px 7px',
-                  borderRadius: '10px'
-                }}>
-                  {item.badge}
-                </span>
-              )}
             </button>
           );
         })}
