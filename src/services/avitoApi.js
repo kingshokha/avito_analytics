@@ -1,5 +1,5 @@
 // Service for interacting with Avito API and fallback state
-// Built according to OpenAPI 3.0.0 Specification for Avito Items API (/core/v1/items, /stats/v1/accounts/...)
+// Built according to OpenAPI 3.0.0 Specification for Avito Items API (/core/v1/items, /stats/v1/accounts/..., /vas/prices)
 
 const API_KEYS_STORAGE_KEY = 'avito_api_credentials';
 const DISCOVERED_ITEMS_KEY = 'avito_cached_item_ids';
@@ -64,49 +64,70 @@ function extractItemsFromPayload(data) {
   return [];
 }
 
-// Helper function to parse actual prices with discounts according to Swagger schema (price: integer | nullable)
-export function parseItemPriceDetails(raw) {
+// Helper function to parse actual prices with discounts according to Swagger schema
+export function parseItemPriceDetails(raw, vasRaw) {
   if (!raw) return { price: 0, formatted: 'Договорная', oldPrice: null, hasDiscount: false, discountPercent: 0 };
 
-  let currentPrice = null;
+  let basePrice = null;
+  let discountedPrice = null;
   let oldPrice = null;
 
-  // Swagger schema specifies price as integer (e.g., 35000) or nullable
+  // Extract base price
   if (typeof raw.price === 'number') {
-    currentPrice = raw.price;
+    basePrice = raw.price;
   } else if (typeof raw.price === 'string' && raw.price.trim() !== '') {
     const num = Number(raw.price.replace(/\D/g, ''));
-    if (!isNaN(num)) currentPrice = num;
+    if (!isNaN(num)) basePrice = num;
   } else if (typeof raw.price === 'object' && raw.price !== null) {
-    currentPrice = raw.price.value ?? raw.price.price ?? raw.price.current ?? null;
+    basePrice = raw.price.value ?? raw.price.price ?? raw.price.current ?? raw.price.main ?? null;
     oldPrice = raw.price.old ?? raw.price.old_price ?? raw.price.original ?? null;
   }
 
-  // Support discount fields if present in payload (price_with_discount / old_price)
-  const discountVal = raw.price_with_discount ?? raw.discount_price ?? raw.priceDiscount ?? null;
-  const originalVal = raw.old_price ?? raw.price_old ?? raw.original_price ?? null;
+  // Look for discount prices in any nested/top-level field returned by Avito API
+  discountedPrice = raw.price_with_discount ?? 
+                    raw.discount_price ?? 
+                    raw.priceDiscount ?? 
+                    raw.price_discount ?? 
+                    raw.discountPrice ?? 
+                    raw.discount?.price ?? 
+                    raw.price?.discount ?? 
+                    raw.priceDetails?.price ?? 
+                    raw.priceDetails?.discount_price ?? 
+                    null;
 
-  if (discountVal !== null) {
-    oldPrice = currentPrice || originalVal;
-    currentPrice = discountVal;
-  } else if (originalVal !== null && oldPrice === null) {
-    oldPrice = originalVal;
+  oldPrice = oldPrice ?? 
+             raw.old_price ?? 
+             raw.price_old ?? 
+             raw.original_price ?? 
+             raw.priceOriginal ?? 
+             raw.priceDetails?.old_price ?? 
+             raw.priceDetails?.price_old ?? 
+             null;
+
+  // Check if vasRaw (from /core/v1/accounts/{user_id}/vas/prices endpoint) has discount info
+  if (vasRaw && Array.isArray(vasRaw.vas) && vasRaw.vas.length > 0) {
+    const vasDiscount = vasRaw.vas.find(v => v.priceOld && v.priceOld > v.price);
+    if (vasDiscount) {
+      discountedPrice = vasDiscount.price;
+      oldPrice = vasDiscount.priceOld;
+    }
   }
 
-  if (currentPrice === null || currentPrice === undefined || currentPrice === 0) {
+  let finalCurrent = discountedPrice !== null ? Number(discountedPrice) : (basePrice !== null ? Number(basePrice) : 0);
+  let finalOld = oldPrice !== null ? Number(oldPrice) : (discountedPrice !== null && basePrice !== null && basePrice > discountedPrice ? Number(basePrice) : null);
+
+  if (finalCurrent === 0) {
     return { price: 0, formatted: 'Договорная', oldPrice: null, hasDiscount: false, discountPercent: 0 };
   }
 
-  const numCurrent = Number(currentPrice);
-  const numOld = oldPrice !== null ? Number(oldPrice) : null;
-  const hasDiscount = Boolean(numOld && numOld > numCurrent);
+  const hasDiscount = Boolean(finalOld && finalOld > finalCurrent);
 
   return {
-    price: numCurrent,
-    formatted: `${numCurrent.toLocaleString('ru-RU')} ₽`,
-    oldPrice: hasDiscount ? `${numOld.toLocaleString('ru-RU')} ₽` : null,
+    price: finalCurrent,
+    formatted: `${finalCurrent.toLocaleString('ru-RU')} ₽`,
+    oldPrice: hasDiscount ? `${finalOld.toLocaleString('ru-RU')} ₽` : null,
     hasDiscount,
-    discountPercent: hasDiscount ? Math.round(((numOld - numCurrent) / numOld) * 100) : 0
+    discountPercent: hasDiscount ? Math.round(((finalOld - finalCurrent) / finalOld) * 100) : 0
   };
 }
 
@@ -167,6 +188,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
       itemsResponse: null,
       autoloadReport: null,
       statsResponse: null,
+      vasPricesResponse: null,
       error: null
     };
 
@@ -331,6 +353,32 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       }
 
+      // Step 4: Fetch VAS prices & discounts (POST /core/v1/accounts/{userId}/vas/prices according to Swagger schema)
+      let vasPricesMap = {};
+      if (targetItemIds.length > 0 && userInfo.id) {
+        try {
+          const vasRes = await fetch(`/avito-api/core/v1/accounts/${userInfo.id}/vas/prices`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ itemIds: targetItemIds })
+          });
+          if (vasRes.ok) {
+            const vasData = await vasRes.json();
+            rawDebugInfo.vasPricesResponse = vasData;
+            if (Array.isArray(vasData)) {
+              vasData.forEach(v => {
+                if (v && v.itemId) {
+                  vasPricesMap[v.itemId] = v;
+                }
+              });
+            }
+          }
+        } catch (e) {}
+      }
+
       // Process and render items
       if (targetItemIds.length > 0) {
         let allDailySeries = [];
@@ -338,8 +386,9 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         const processedItems = targetItemIds.map((id) => {
           const foundRaw = itemsMapById[id];
           const stRaw = statsMap[id];
+          const vasRaw = vasPricesMap[id];
           const { impressions, views, contacts, favorites, spend, daily } = parseItemMetrics(stRaw);
-          const priceInfo = parseItemPriceDetails(foundRaw);
+          const priceInfo = parseItemPriceDetails(foundRaw, vasRaw);
           
           if (daily.length > 0) {
             allDailySeries = allDailySeries.concat(daily);
