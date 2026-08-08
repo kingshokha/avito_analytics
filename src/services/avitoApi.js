@@ -1,9 +1,7 @@
-// Service for interacting with Avito API with Rate-Limiting, Token Caching, and Delivery History
+// Service for interacting with Avito API and fallback state
 
 const API_KEYS_STORAGE_KEY = 'avito_api_credentials';
 const DISCOVERED_ITEMS_KEY = 'avito_cached_item_ids';
-const TOKEN_CACHE_KEY = 'avito_cached_access_token';
-const MANUAL_DELIVERY_ORDERS_KEY = 'avito_manual_delivery_orders';
 
 export const getStoredCredentials = () => {
   try {
@@ -22,65 +20,28 @@ export const saveCredentials = (clientId, clientSecret, customItemIds = '') => {
     connectedAt: new Date().toISOString() 
   };
   localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(payload));
-  localStorage.removeItem(TOKEN_CACHE_KEY); // Reset token on key change
   return payload;
 };
 
 export const clearCredentials = () => {
   localStorage.removeItem(API_KEYS_STORAGE_KEY);
   localStorage.removeItem(DISCOVERED_ITEMS_KEY);
-  localStorage.removeItem(TOKEN_CACHE_KEY);
 };
 
-// Local storage management for custom/historical delivery orders
-export const getStoredManualDeliveryOrders = () => {
-  try {
-    const saved = localStorage.getItem(MANUAL_DELIVERY_ORDERS_KEY);
-    return saved ? JSON.parse(saved) : [];
-  } catch (e) {
-    return [];
-  }
-};
-
-export const saveManualDeliveryOrder = (newOrder) => {
-  const existing = getStoredManualDeliveryOrders();
-  const updated = [newOrder, ...existing.filter(o => o.id !== newOrder.id && o.trackNumber !== newOrder.trackNumber)];
-  localStorage.setItem(MANUAL_DELIVERY_ORDERS_KEY, JSON.stringify(updated));
-  return updated;
-};
-
-// Helper sleep function for API Throttling
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// Authenticate via OAuth 2.0 Client Credentials with LocalStorage Token Caching (1 Hour)
+// Authenticate via OAuth 2.0 Client Credentials
 export const fetchAccessToken = async (clientId, clientSecret) => {
-  try {
-    const cached = localStorage.getItem(TOKEN_CACHE_KEY);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (parsed.token && parsed.expiresAt && Date.now() < parsed.expiresAt) {
-        return parsed.token;
-      }
-    }
-  } catch (e) {}
-
   const params = new URLSearchParams();
   params.append('grant_type', 'client_credentials');
   params.append('client_id', clientId);
   params.append('client_secret', clientSecret);
 
-  let response;
-  try {
-    response = await fetch('/avito-api/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString()
-    });
-  } catch (netErr) {
-    throw new Error(`Ошибка подключения к серверам Авито (Failed to fetch). Возможно, ваш IP временно заблокирован за частые запросы или требуется пройти капчу на avito.ru`);
-  }
+  const response = await fetch('/avito-api/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString()
+  });
 
   if (!response.ok) {
     const errText = await response.text();
@@ -88,220 +49,19 @@ export const fetchAccessToken = async (clientId, clientSecret) => {
   }
 
   const data = await response.json();
-  const token = data.access_token;
-  const expiresInMs = (data.expires_in || 3600) * 1000 - 60000;
-
-  try {
-    localStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify({
-      token,
-      expiresAt: Date.now() + expiresInMs
-    }));
-  } catch (e) {}
-
-  return token;
+  return data.access_token;
 };
 
 // Helper function to extract array of items from any API response structure
 function extractItemsFromPayload(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data;
-  if (Array.isArray(data.chats)) return data.chats;
-  if (Array.isArray(data.orders)) return data.orders;
-  if (Array.isArray(data.operations)) return data.operations;
   if (Array.isArray(data.resources)) return data.resources;
   if (Array.isArray(data.items)) return data.items;
   if (Array.isArray(data.result)) return data.result;
   if (Array.isArray(data.data)) return data.data;
   return [];
 }
-
-// Fetch real Avito Messenger Chats
-export const fetchAvitoChats = async () => {
-  const creds = getStoredCredentials();
-  if (!creds || !creds.clientId || !creds.clientSecret) return null;
-
-  try {
-    const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
-    const userRes = await fetch('/avito-api/core/v1/accounts/self', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!userRes.ok) return null;
-    const user = await userRes.json();
-
-    await sleep(200);
-
-    const chatsRes = await fetch(`/avito-api/messenger/v2/accounts/${user.id}/chats?unread_only=false&limit=30`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-
-    if (chatsRes.ok) {
-      const data = await chatsRes.json();
-      const rawChats = extractItemsFromPayload(data);
-      if (rawChats.length > 0) {
-        return rawChats.map(c => ({
-          id: c.id,
-          user: c.users?.[0]?.name || c.title || `Покупатель ${c.id.slice(0, 6)}`,
-          avatar: c.users?.[0]?.avatar?.images?.['100x100'] || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80',
-          itemTitle: c.context?.value?.title || 'Объявление на Авито',
-          itemPrice: c.context?.value?.price ? `${c.context.value.price.toLocaleString('ru-RU')} ₽` : 'Цена по запросу',
-          itemImg: c.context?.value?.images?.['100x100'] || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=100&auto=format&fit=crop&q=80',
-          unread: c.unread_count || 0,
-          lastTime: c.updated_at ? new Date(c.updated_at * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'Недавно',
-          messages: (c.last_message ? [{
-            id: c.last_message.id,
-            sender: c.last_message.author_id === user.id ? 'me' : 'user',
-            text: c.last_message.content?.text || 'Сообщение',
-            time: new Date((c.last_message.created || Date.now() / 1000) * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-          }] : [])
-        }));
-      }
-    }
-  } catch (e) {
-    console.warn('Откат на локальные данные чатов:', e);
-  }
-  return null;
-};
-
-// Send message via real Avito Messenger API
-export const sendAvitoChatMessage = async (chatId, text) => {
-  const creds = getStoredCredentials();
-  if (!creds || !creds.clientId || !creds.clientSecret) return false;
-
-  try {
-    const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
-    const userRes = await fetch('/avito-api/core/v1/accounts/self', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!userRes.ok) return false;
-    const user = await userRes.json();
-
-    const res = await fetch(`/avito-api/messenger/v1/accounts/${user.id}/chats/${chatId}/messages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        message: { text },
-        type: 'text'
-      })
-    });
-    return res.ok;
-  } catch (e) {
-    console.error('Ошибка отправки сообщения через Avito API:', e);
-    return false;
-  }
-};
-
-// Comprehensive Fetcher for Real & Historical Avito Delivery Orders
-export const fetchAvitoDeliveryOrders = async () => {
-  const creds = getStoredCredentials();
-  const manualSaved = getStoredManualDeliveryOrders();
-
-  let fetchedOrders = [];
-
-  if (creds && creds.clientId && creds.clientSecret) {
-    try {
-      const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
-      const userRes = await fetch('/avito-api/core/v1/accounts/self', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      if (userRes.ok) {
-        const user = await userRes.json();
-
-        // 1. Query general orders endpoint
-        try {
-          const res1 = await fetch(`/avito-api/core/v1/accounts/${user.id}/orders?limit=100`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (res1.ok) {
-            const data1 = await res1.json();
-            fetchedOrders = fetchedOrders.concat(extractItemsFromPayload(data1));
-          }
-        } catch (e) {}
-
-        await sleep(200);
-
-        // 2. Query completed/history orders status endpoint
-        try {
-          const res2 = await fetch(`/avito-api/core/v1/accounts/${user.id}/orders?status=completed&limit=100`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (res2.ok) {
-            const data2 = await res2.json();
-            fetchedOrders = fetchedOrders.concat(extractItemsFromPayload(data2));
-          }
-        } catch (e) {}
-
-        await sleep(200);
-
-        // 3. Query financial operations for historical payout transactions
-        try {
-          const res3 = await fetch(`/avito-api/user/v1/accounts/${user.id}/operations?limit=100`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (res3.ok) {
-            const data3 = await res3.json();
-            const ops = extractItemsFromPayload(data3);
-            ops.forEach(op => {
-              if (op.amount && op.amount > 0) {
-                fetchedOrders.push({
-                  id: op.operation_id || op.id || `op-${Date.now()}`,
-                  tracking_number: op.track_number || op.tracking_number || `AV-${op.id || Math.floor(Math.random()*899999 + 100000)}`,
-                  buyer: { name: op.description || 'Покупатель Авито' },
-                  item: { title: op.item_title || op.title || 'Доставка товара с Авито' },
-                  price: Math.round(op.amount * 1.03),
-                  status: 'completed',
-                  status_title: 'Выплачено за доставку',
-                  carrier: op.service_name || 'Авито Доставка',
-                  delivery_date: op.updated_at || op.date || 'Завершен'
-                });
-              }
-            });
-          }
-        } catch (e) {}
-      }
-    } catch (e) {
-      console.warn('Ошибка забора доставок с API:', e);
-    }
-  }
-
-  // Deduplicate fetched orders by ID or Track Number
-  const ordersMap = {};
-
-  manualSaved.forEach(o => {
-    if (o && o.id) ordersMap[o.id] = o;
-  });
-
-  fetchedOrders.forEach(o => {
-    if (!o) return;
-    const realId = `del-${o.id || o.order_id || o.tracking_number}`;
-    const priceNum = Number(o.price || 0);
-    const statusClean = (o.status === 'delivered' || o.status === 'completed' || o.status === 'closed' || o.status === 'paid')
-      ? 'completed'
-      : (o.status === 'cancelled' ? 'cancelled' : 'in_transit');
-
-    ordersMap[realId] = {
-      id: realId,
-      trackNumber: o.tracking_number || o.track_code || `AV-${o.id || Math.floor(Math.random()*899999 + 100000)}`,
-      buyer: o.buyer?.name || 'Покупатель Авито',
-      city: o.delivery_point?.city || o.city || 'Россия',
-      itemTitle: o.item?.title || o.title || 'Товар с Авито',
-      itemPrice: `${priceNum.toLocaleString('ru-RU')} ₽`,
-      payoutAmount: priceNum > 0 ? Math.round(priceNum * 0.97) : 0,
-      feeAmount: priceNum > 0 ? Math.round(priceNum * 0.03) : 0,
-      carrier: o.carrier || 'СДЭК',
-      carrierColor: '#10b981',
-      status: statusClean,
-      statusText: o.status_title || (statusClean === 'completed' ? 'Завершен и Выплачен' : 'В процессе доставки'),
-      eta: o.delivery_date || 'Выполнено',
-      date: o.delivery_date || new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' })
-    };
-  });
-
-  return Object.values(ordersMap);
-};
 
 // Helper function to aggregate metrics from any Avito JSON structure
 function parseItemMetrics(stRaw) {
@@ -349,7 +109,7 @@ function parseItemMetrics(stRaw) {
   return { impressions, views, contacts, favorites, spend, daily };
 }
 
-// Data Fetcher including Active + Sold/Archived Items Title Resolution
+// Main data fetching function supporting real API & fallback demo
 export const fetchDashboardData = async (period = '30', forceDemo = false) => {
   const creds = getStoredCredentials();
   
@@ -364,8 +124,8 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
     };
 
     try {
-      console.log('Безопасный запрос данных через Avito API...');
-      const token = await fetchAccessToken(creds.clientId, clientSecret);
+      console.log('Глубокое сканирование объявлений через Avito API...');
+      const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
       rawDebugInfo.tokenAcquired = true;
       
       // Step 1: Get current user profile
@@ -379,95 +139,104 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         rawDebugInfo.userInfo = userInfo;
       }
 
-      await sleep(250);
-
-      // Step 2: Fetch both Active AND Sold/Archived items to resolve all titles
+      // Step 2: Auto-Discovery Pipeline
       let allDiscovered = [];
 
-      // Query 2A: Active items
-      try {
-        const resActive = await fetch('/avito-api/core/v1/items?per_page=100', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (resActive.ok) {
-          const dataActive = await resActive.json();
-          rawDebugInfo.itemsResponse = dataActive;
-          allDiscovered = allDiscovered.concat(extractItemsFromPayload(dataActive));
-        }
-      } catch (e) {}
+      // Query A: Paginated scan of GET /core/v1/items (Pages 1 to 5)
+      for (let page = 1; page <= 5; page++) {
+        try {
+          const res = await fetch(`/avito-api/core/v1/items?per_page=100&page=${page}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (page === 1) rawDebugInfo.itemsResponse = data;
+            const list = extractItemsFromPayload(data);
+            if (list.length > 0) {
+              allDiscovered = allDiscovered.concat(list);
+            } else {
+              break;
+            }
+          } else {
+            if (page === 1) rawDebugInfo.itemsResponse = { error: await res.text(), status: res.status };
+            break;
+          }
+        } catch (e) { break; }
+      }
 
-      await sleep(200);
+      // Query B: Filter by specific status values
+      const statusList = ['active', 'old', 'removed', 'blocked', 'rejected'];
+      for (const st of statusList) {
+        try {
+          const res = await fetch(`/avito-api/core/v1/items?status=${st}&per_page=100`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const list = extractItemsFromPayload(data);
+            if (list.length > 0) {
+              allDiscovered = allDiscovered.concat(list);
+            }
+          }
+        } catch (e) {}
+      }
 
-      // Query 2B: Sold / Archived items (status=old)
-      try {
-        const resOld = await fetch('/avito-api/core/v1/items?status=old&per_page=100', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (resOld.ok) {
-          const dataOld = await resOld.json();
-          allDiscovered = allDiscovered.concat(extractItemsFromPayload(dataOld));
-        }
-      } catch (e) {}
+      // Query C: Check Autoload report items if available
+      if (userInfo.id) {
+        try {
+          const autoRes = await fetch(`/avito-api/autoload/v1/accounts/${userInfo.id}/reports/last_report/`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (autoRes.ok) {
+            const autoData = await autoRes.json();
+            rawDebugInfo.autoloadReport = autoData;
+            const autoList = extractItemsFromPayload(autoData.report || autoData);
+            if (autoList.length > 0) {
+              allDiscovered = allDiscovered.concat(autoList.map(it => ({
+                id: it.avito_id || it.itemId || it.id || it.item_id,
+                title: it.title || `Объявление #${it.avito_id || it.id}`,
+                price: it.price
+              })));
+            }
+          }
+        } catch (e) {}
+      }
 
-      await sleep(200);
-
-      // Query 2C: Removed/blocked items (status=removed)
-      try {
-        const resRemoved = await fetch('/avito-api/core/v1/items?status=removed&per_page=100', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (resRemoved.ok) {
-          const dataRemoved = await resRemoved.json();
-          allDiscovered = allDiscovered.concat(extractItemsFromPayload(dataRemoved));
-        }
-      } catch (e) {}
-
-      // Map items by ID
-      const itemsMapById = {};
-      allDiscovered.forEach(it => {
-        if (!it) return;
-        const realId = it.id || it.itemId || it.avito_id || it.item_id;
-        if (realId) {
-          itemsMapById[realId] = {
-            ...it,
-            id: realId
-          };
-        }
-      });
-
-      // Parse custom Item IDs entered in settings
+      // Parse custom Item IDs entered manually in settings
       let manualIds = [];
       if (creds.customItemIds) {
         manualIds = creds.customItemIds
           .split(/[\s,;\n\r]+/)
-          .map(id => id.replace(/\D/g, ''))
+          .map(id => String(id).replace(/\D/g, ''))
           .filter(Boolean);
       }
 
-      let rawItemIds = Object.keys(itemsMapById);
-      let targetItemIds = Array.from(new Set([...rawItemIds, ...manualIds]))
-        .map(id => Number(String(id).replace(/\D/g, '')))
+      // STRICT DEDUPLICATION BY NORMALIZED NUMERIC ID
+      const itemsMapById = {};
+      allDiscovered.forEach(it => {
+        if (!it) return;
+        const rawId = it.id || it.itemId || it.avito_id || it.item_id;
+        if (rawId) {
+          const cleanIdStr = String(rawId).replace(/\D/g, '');
+          if (cleanIdStr && !itemsMapById[cleanIdStr]) {
+            itemsMapById[cleanIdStr] = {
+              ...it,
+              id: Number(cleanIdStr)
+            };
+          }
+        }
+      });
+
+      let discoveredNumericIds = Object.keys(itemsMapById).map(id => Number(id));
+      let manualNumericIds = manualIds.map(id => Number(id));
+
+      // Combine discovered and manual IDs without duplicates
+      let targetItemIds = Array.from(new Set([...discoveredNumericIds, ...manualNumericIds]))
         .filter(n => !isNaN(n) && n > 0);
 
-      // Single item detail lookup for any remaining target items lacking titles
-      for (const id of targetItemIds) {
-        if (!itemsMapById[id] || !itemsMapById[id].title) {
-          try {
-            await sleep(150);
-            const itemRes = await fetch(`/avito-api/core/v1/items/${id}`, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            if (itemRes.ok) {
-              const singleData = await itemRes.json();
-              if (singleData && (singleData.title || singleData.id)) {
-                itemsMapById[id] = {
-                  ...singleData,
-                  id
-                };
-              }
-            }
-          } catch (e) {}
-        }
+      // Save valid real IDs into localStorage cache (clearing any old demo IDs)
+      if (targetItemIds.length > 0) {
+        localStorage.setItem(DISCOVERED_ITEMS_KEY, JSON.stringify(targetItemIds));
       }
 
       // Calculate date range (YYYY-MM-DD)
@@ -476,8 +245,6 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
       const dateFromObj = new Date();
       dateFromObj.setDate(dateFromObj.getDate() - days);
       const dateFrom = dateFromObj.toISOString().split('T')[0];
-
-      await sleep(250);
 
       // Step 3: Fetch statistics for all target Item IDs
       let statsMap = {};
@@ -515,7 +282,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       }
 
-      // Process and render ALL items (Active + Sold + Archived) with titles resolved
+      // Process and render items
       if (targetItemIds.length > 0) {
         let allDailySeries = [];
 
@@ -528,22 +295,20 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             allDailySeries = allDailySeries.concat(daily);
           }
 
-          const isSoldOrArchived = foundRaw?.status === 'old' || foundRaw?.status === 'removed' || foundRaw?.status === 'blocked';
-          const titleText = foundRaw?.title || (isSoldOrArchived ? `Проданный товар #${id}` : `Объявление #${id}`);
-
           return {
             id: `av-${id}`,
-            title: titleText,
-            category: foundRaw?.category?.name || (isSoldOrArchived ? 'Архив / Продано' : 'Товары / Сервисы'),
-            price: foundRaw?.price ? `${foundRaw.price.toLocaleString('ru-RU')} ₽` : '—',
-            impressions: impressions || Math.round((views || 0) * 3.8),
-            views: views || 0,
-            contacts: contacts || 0,
+            numericId: id,
+            title: foundRaw?.title || `Объявление #${id}`,
+            category: foundRaw?.category?.name || 'Товары / Сервисы',
+            price: foundRaw?.price ? `${foundRaw.price.toLocaleString('ru-RU')} ₽` : 'Договорная',
+            impressions: impressions || Math.round((views || 10) * 3.8),
+            views: views || foundRaw?.views || 0,
+            contacts: contacts || foundRaw?.contacts || 0,
             favorites: favorites || 0,
             spend: spend || Number(foundRaw?.spend ?? foundRaw?.expenses ?? 0),
             ctr: (views > 0) ? `${((contacts / views) * 100).toFixed(1)}%` : '0%',
-            status: isSoldOrArchived ? (foundRaw?.status || 'old') : (foundRaw?.status || 'active'),
-            service: isSoldOrArchived ? 'Продано' : (spend > 0 ? 'Платная услуга Авито' : 'Без продвижения'),
+            status: foundRaw?.status || 'active',
+            service: spend > 0 ? 'Платная услуга Авито' : 'Без продвижения',
             img: foundRaw?.url || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=150&auto=format&fit=crop&q=80'
           };
         });
@@ -552,33 +317,58 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         return {
           ...res,
           rawDebugInfo,
-          apiNotice: `Синхронизация успешна. Обработано объявлений (активных и проданных): ${processedItems.length}.`
+          apiNotice: `Синхронизация успешна. Всего уникальных объявлений: ${targetItemIds.length}.`
         };
       } else {
-        const mock = generateMockData(period);
+        // Zero items found on real user account - return empty list with zero totals (NO DEMO ITEMS)
         return {
-          ...mock,
           isReal: true,
           userInfo,
           rawDebugInfo,
           hasZeroItems: true,
-          apiNotice: `Авторизация успешна (Аккаунт ID: ${userInfo.id || 'OK'}). Объявления будут автоматически добавляться по мере публикации на Авито.`
+          kpis: {
+            impressions: { value: 0, trend: 'Реальный API', isPositive: true },
+            views: { value: 0, trend: 'Реальный API', isPositive: true },
+            contacts: { value: 0, trend: 'Реальный API', isPositive: true },
+            favorites: { value: 0, trend: 'Реальный API', isPositive: true },
+            spend: { value: '0 ₽', trend: 'Реальный API', isPositive: true },
+            cpl: { value: '0 ₽', trend: 'Реальный API', isPositive: true },
+            roi: { value: '0%', trend: 'Реальный API', isPositive: true }
+          },
+          dailyStats: generateDailyFromTotals(0, 0, period),
+          items: [],
+          spendDistribution: [
+            { name: 'Без продвижения', value: 100, color: '#64748b' }
+          ],
+          apiNotice: `Авторизация успешна (Аккаунт ID: ${userInfo.id || 'OK'}). У данного аккаунта пока нет объявлений. Объявления появятся автоматически после публикации на Авито.`
         };
       }
     } catch (err) {
       console.error('Ошибка при работе с Avito API:', err);
       rawDebugInfo.error = err.message;
-      const mock = generateMockData(period);
       return {
-        ...mock,
         isReal: false,
+        userInfo: null,
         rawDebugInfo,
         apiError: err.message,
-        apiNotice: `Ошибка синхронизации Avito API: ${err.message}. Отображаются демонстрационные данные.`
+        kpis: {
+          impressions: { value: 0, trend: 'Ошибка API', isPositive: false },
+          views: { value: 0, trend: 'Ошибка API', isPositive: false },
+          contacts: { value: 0, trend: 'Ошибка API', isPositive: false },
+          favorites: { value: 0, trend: 'Ошибка API', isPositive: false },
+          spend: { value: '0 ₽', trend: 'Ошибка API', isPositive: false },
+          cpl: { value: '0 ₽', trend: 'Ошибка API', isPositive: false },
+          roi: { value: '0%', trend: 'Ошибка API', isPositive: false }
+        },
+        dailyStats: [],
+        items: [],
+        spendDistribution: [],
+        apiNotice: `Ошибка синхронизации Avito API: ${err.message}. Проверьте введенные ключи Client ID и Client Secret.`
       };
     }
   }
 
+  // Fallback demo only when NO credentials are saved at all
   const mock = generateMockData(period);
   return {
     ...mock,
@@ -658,7 +448,7 @@ function generateDailyFromTotals(totalViews, totalContacts, period) {
   const dailyStats = [];
   const today = new Date();
   
-  const avgViews = Math.max(1, Math.floor(totalViews / days));
+  const avgViews = Math.max(0, Math.floor(totalViews / days));
   const avgContacts = Math.max(0, Math.floor(totalContacts / days));
 
   for (let i = days; i >= 0; i--) {
@@ -810,7 +600,7 @@ function generateMockData(period = '30') {
       favorites: { value: totalFavorites, trend: '+9.1%', isPositive: true },
       spend: { value: `${totalSpend.toLocaleString('ru-RU')} ₽`, trend: '-4.8%', isPositive: true },
       cpl: { value: `${cpl} ₽`, trend: '-12.0%', isPositive: true },
-      roi: { value: totalSpend > 0 ? `${Math.round(((totalContacts * 3000 - totalSpend) / totalSpend) * 100)}%` : '0%', trend: 'Авто-синхронизация', isPositive: true }
+      roi: { value: `${roi}%`, trend: '+22.4%', isPositive: true }
     },
     dailyStats,
     items,
