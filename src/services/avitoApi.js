@@ -398,22 +398,6 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       } catch (e) {}
 
-      // Read stored/cached item IDs
-      let cachedIds = [];
-      try {
-        const stored = localStorage.getItem(DISCOVERED_ITEMS_KEY);
-        if (stored) cachedIds = JSON.parse(stored);
-      } catch (e) {}
-
-      // Parse custom Item IDs entered in settings
-      let manualIds = [];
-      if (creds.customItemIds) {
-        manualIds = creds.customItemIds
-          .split(/[\s,;\n\r]+/)
-          .map(id => id.replace(/\D/g, ''))
-          .filter(Boolean);
-      }
-
       // Deduplicate discovered items
       const itemsMapById = {};
       allDiscovered.forEach(it => {
@@ -427,11 +411,21 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       });
 
+      // Parse custom Item IDs entered in settings
+      let manualIds = [];
+      if (creds.customItemIds) {
+        manualIds = creds.customItemIds
+          .split(/[\s,;\n\r]+/)
+          .map(id => id.replace(/\D/g, ''))
+          .filter(Boolean);
+      }
+
       let rawItemIds = Object.keys(itemsMapById);
-      let targetItemIds = Array.from(new Set([...rawItemIds, ...cachedIds, ...manualIds]))
+      let targetItemIds = Array.from(new Set([...rawItemIds, ...manualIds]))
         .map(id => Number(String(id).replace(/\D/g, '')))
         .filter(n => !isNaN(n) && n > 0);
 
+      // Store only active valid item IDs in cache
       if (targetItemIds.length > 0) {
         localStorage.setItem(DISCOVERED_ITEMS_KEY, JSON.stringify(targetItemIds));
       }
@@ -445,7 +439,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
 
       await sleep(250);
 
-      // Step 3: Fetch statistics for all target Item IDs (numbers)
+      // Step 3: Fetch statistics for all target Item IDs
       let statsMap = {};
       if (targetItemIds.length > 0 && userInfo.id) {
         try {
@@ -481,7 +475,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       }
 
-      // Process and render items
+      // Process and render items with strict filtering against empty/archived ghosts
       if (targetItemIds.length > 0) {
         let allDailySeries = [];
 
@@ -494,28 +488,38 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             allDailySeries = allDailySeries.concat(daily);
           }
 
+          const hasRealTitle = Boolean(foundRaw && foundRaw.title);
+          const hasMetrics = (views > 0 || contacts > 0 || spend > 0 || impressions > 0);
+
+          // If no title AND zero metrics, this is a ghost deleted/archived item
+          if (!hasRealTitle && !hasMetrics) {
+            return null;
+          }
+
+          const isArchived = foundRaw?.status === 'old' || foundRaw?.status === 'removed' || foundRaw?.status === 'blocked' || !hasRealTitle;
+
           return {
             id: `av-${id}`,
-            title: foundRaw?.title || `Объявление #${id}`,
-            category: foundRaw?.category?.name || 'Товары / Сервисы',
-            price: foundRaw?.price ? `${foundRaw.price.toLocaleString('ru-RU')} ₽` : 'Договорная',
-            impressions: impressions || Math.round((views || 10) * 3.8),
-            views: views || foundRaw?.views || 0,
-            contacts: contacts || foundRaw?.contacts || 0,
+            title: foundRaw?.title || `[Архив] Объявление #${id}`,
+            category: foundRaw?.category?.name || (isArchived ? 'Архив' : 'Товары / Сервисы'),
+            price: foundRaw?.price ? `${foundRaw.price.toLocaleString('ru-RU')} ₽` : '—',
+            impressions: impressions || Math.round((views || 0) * 3.8),
+            views: views || 0,
+            contacts: contacts || 0,
             favorites: favorites || 0,
             spend: spend || Number(foundRaw?.spend ?? foundRaw?.expenses ?? 0),
             ctr: (views > 0) ? `${((contacts / views) * 100).toFixed(1)}%` : '0%',
-            status: foundRaw?.status || 'active',
+            status: isArchived ? (foundRaw?.status || 'old') : (foundRaw?.status || 'active'),
             service: spend > 0 ? 'Платная услуга Авито' : 'Без продвижения',
             img: foundRaw?.url || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=150&auto=format&fit=crop&q=80'
           };
-        });
+        }).filter(Boolean); // Filter out null ghost items
 
         const res = processRealItemsAndStats(processedItems, allDailySeries, userInfo, period);
         return {
           ...res,
           rawDebugInfo,
-          apiNotice: `Синхронизация успешна. Всего обработано объявлений: ${targetItemIds.length}.`
+          apiNotice: `Синхронизация успешна. Активных объявлений в таблице: ${processedItems.length}.`
         };
       } else {
         const mock = generateMockData(period);
