@@ -52,13 +52,18 @@ export const fetchAccessToken = async (clientId, clientSecret) => {
   params.append('client_id', clientId);
   params.append('client_secret', clientSecret);
 
-  const response = await fetch('/avito-api/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: params.toString()
-  });
+  let response;
+  try {
+    response = await fetch('/avito-api/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString()
+    });
+  } catch (netErr) {
+    throw new Error(`Ошибка подключения к серверам Авито (Failed to fetch). Возможно, ваш IP временно заблокирован за частые запросы или требуется пройти капчу на avito.ru`);
+  }
 
   if (!response.ok) {
     const errText = await response.text();
