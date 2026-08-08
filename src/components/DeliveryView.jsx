@@ -1,13 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, RefreshCw, Loader2, History, Archive, Check } from 'lucide-react';
-import { fetchAvitoDeliveryOrders } from '../services/avitoApi';
+import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, RefreshCw, Loader2, History, Plus, X } from 'lucide-react';
+import { fetchAvitoDeliveryOrders, saveManualDeliveryOrder } from '../services/avitoApi';
 
 export default function DeliveryView() {
   const [orders, setOrders] = useState([]);
   const [activeTabSection, setActiveTabSection] = useState('active'); // 'active' or 'history'
-  const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Modal for manually adding past orders
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newOrderForm, setNewOrderForm] = useState({
+    trackNumber: '',
+    itemTitle: '',
+    buyer: '',
+    city: '',
+    price: '',
+    carrier: 'СДЭК',
+    status: 'completed'
+  });
 
   const loadRealDelivery = async () => {
     setIsLoading(true);
@@ -30,6 +41,34 @@ export default function DeliveryView() {
     loadRealDelivery();
   }, []);
 
+  const handleAddOrderSubmit = (e) => {
+    e.preventDefault();
+    if (!newOrderForm.itemTitle || !newOrderForm.price) return;
+
+    const priceNum = Number(newOrderForm.price.replace(/\D/g, '')) || 0;
+    const manualOrder = {
+      id: `manual-${Date.now()}`,
+      trackNumber: newOrderForm.trackNumber || `AV-${Math.floor(Math.random()*899999 + 100000)}`,
+      buyer: newOrderForm.buyer || 'Покупатель Авито',
+      city: newOrderForm.city || 'Россия',
+      itemTitle: newOrderForm.itemTitle,
+      itemPrice: `${priceNum.toLocaleString('ru-RU')} ₽`,
+      payoutAmount: Math.round(priceNum * 0.97),
+      feeAmount: Math.round(priceNum * 0.03),
+      carrier: newOrderForm.carrier || 'СДЭК',
+      carrierColor: '#10b981',
+      status: newOrderForm.status,
+      statusText: newOrderForm.status === 'completed' ? 'Завершен и Выплачен' : 'В процессе доставки',
+      eta: 'Архив',
+      date: new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' })
+    };
+
+    saveManualDeliveryOrder(manualOrder);
+    setOrders(prev => [manualOrder, ...prev]);
+    setIsAddModalOpen(false);
+    setNewOrderForm({ trackNumber: '', itemTitle: '', buyer: '', city: '', price: '', carrier: 'СДЭК', status: 'completed' });
+  };
+
   // Separate active vs historical orders
   const activeOrders = orders.filter(o => o.status === 'in_transit' || o.status === 'ready_for_pickup');
   const historyOrders = orders.filter(o => o.status === 'completed' || o.status === 'cancelled' || o.status === 'delivered');
@@ -50,8 +89,7 @@ export default function DeliveryView() {
                           (o.trackNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (o.itemTitle || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (o.city || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' ? true : o.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    return matchesSearch;
   });
 
   const getStatusBadge = (status, text) => {
@@ -85,48 +123,59 @@ export default function DeliveryView() {
 
   return (
     <div className="fade-in">
-      {/* Sub-navigation tabs: Active vs History */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-        <button
-          onClick={() => { setActiveTabSection('active'); setStatusFilter('all'); }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '12px 20px',
-            borderRadius: '12px',
-            border: `1px solid ${activeTabSection === 'active' ? 'var(--primary-avito)' : 'var(--border-color)'}`,
-            background: activeTabSection === 'active' ? 'rgba(0, 170, 142, 0.15)' : 'rgba(15, 23, 42, 0.6)',
-            color: activeTabSection === 'active' ? '#00aa8e' : 'var(--text-muted)',
-            fontSize: '14px',
-            fontWeight: '700',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
-          }}
-        >
-          <Truck size={18} />
-          <span>Активные доставки ({activeOrders.length})</span>
-        </button>
+      {/* Sub-navigation & Manual Order Add Action */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            onClick={() => setActiveTabSection('active')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 20px',
+              borderRadius: '12px',
+              border: `1px solid ${activeTabSection === 'active' ? 'var(--primary-avito)' : 'var(--border-color)'}`,
+              background: activeTabSection === 'active' ? 'rgba(0, 170, 142, 0.15)' : 'rgba(15, 23, 42, 0.6)',
+              color: activeTabSection === 'active' ? '#00aa8e' : 'var(--text-muted)',
+              fontSize: '14px',
+              fontWeight: '700',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+          >
+            <Truck size={18} />
+            <span>Активные доставки ({activeOrders.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTabSection('history')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 20px',
+              borderRadius: '12px',
+              border: `1px solid ${activeTabSection === 'history' ? 'var(--primary-avito)' : 'var(--border-color)'}`,
+              background: activeTabSection === 'history' ? 'rgba(0, 170, 142, 0.15)' : 'rgba(15, 23, 42, 0.6)',
+              color: activeTabSection === 'history' ? '#00aa8e' : 'var(--text-muted)',
+              fontSize: '14px',
+              fontWeight: '700',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+          >
+            <History size={18} />
+            <span>История завершенных ({historyOrders.length})</span>
+          </button>
+        </div>
 
         <button
-          onClick={() => { setActiveTabSection('history'); setStatusFilter('all'); }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '12px 20px',
-            borderRadius: '12px',
-            border: `1px solid ${activeTabSection === 'history' ? 'var(--primary-avito)' : 'var(--border-color)'}`,
-            background: activeTabSection === 'history' ? 'rgba(0, 170, 142, 0.15)' : 'rgba(15, 23, 42, 0.6)',
-            color: activeTabSection === 'history' ? '#00aa8e' : 'var(--text-muted)',
-            fontSize: '14px',
-            fontWeight: '700',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
-          }}
+          className="btn-secondary"
+          onClick={() => setIsAddModalOpen(true)}
+          style={{ padding: '10px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
         >
-          <History size={18} />
-          <span>История завершенных ({historyOrders.length})</span>
+          <Plus size={16} />
+          <span>Добавить прошлую доставку</span>
         </button>
       </div>
 
@@ -175,7 +224,7 @@ export default function DeliveryView() {
           <div className="kpi-value">{completedCount}</div>
           <div className="kpi-trend positive">
             <ShieldCheck size={14} />
-            <span>История выплат ({totalPayout.toLocaleString('ru-RU')} ₽)</span>
+            <span>Выплаты: {totalPayout.toLocaleString('ru-RU')} ₽</span>
           </div>
         </div>
       </div>
@@ -240,11 +289,15 @@ export default function DeliveryView() {
                 ? 'Нет активных заказов в процессе отправки' 
                 : 'История завершенных доставок пока пуста'}
             </h4>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', maxWidth: '500px', margin: '0 auto' }}>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', maxWidth: '500px', margin: '0 auto 20px auto' }}>
               {activeTabSection === 'active'
-                ? 'Когда покупатель оформит заказ Авито Доставкой, статус посылки и трек-номер отслеживания автоматически появятся здесь.'
-                : 'После того как покупатели заберут товары в ПВЗ и Авито перечислит вам деньги, завершенные сделки отобразятся в этой истории.'}
+                ? 'Когда покупатель оформит заказ Авито Доставкой, статус посылки и трек-номер автоматически появятся здесь.'
+                : 'Завершенные выплаченные доставки подтягиваются из профиля Авито API. Вы также можете вручную добавить прошлый трек-номер ниже.'}
             </p>
+            <button className="btn-secondary" onClick={() => setIsAddModalOpen(true)}>
+              <Plus size={14} />
+              <span>Добавить прошлый трек-код вручную</span>
+            </button>
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -312,6 +365,139 @@ export default function DeliveryView() {
           </div>
         )}
       </div>
+
+      {/* Manual Past Order Add Modal */}
+      {isAddModalOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(2, 6, 23, 0.8)',
+          backdropFilter: 'blur(8px)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '20px'
+        }}>
+          <div className="glass-card" style={{ width: '100%', maxWidth: '500px', padding: '24px', position: 'relative' }}>
+            <button
+              onClick={() => setIsAddModalOpen(false)}
+              style={{ position: 'absolute', top: '16px', right: '16px', background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+            >
+              <X size={20} />
+            </button>
+
+            <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-main)', marginBottom: '8px' }}>
+              Внести прошлую доставку в историю
+            </h3>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '20px' }}>
+              Введите трек-номер или наименование проданного товара для добавления в архив доставок
+            </p>
+
+            <form onSubmit={handleAddOrderSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label className="form-label">Наименование товара *</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Например: Игровой ПК Core i7 / RTX 4080"
+                  required
+                  value={newOrderForm.itemTitle}
+                  onChange={e => setNewOrderForm({ ...newOrderForm, itemTitle: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label">Трек-номер отправки</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="AV-12345678"
+                    value={newOrderForm.trackNumber}
+                    onChange={e => setNewOrderForm({ ...newOrderForm, trackNumber: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="form-label">Сумма продажи (₽) *</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="25 000"
+                    required
+                    value={newOrderForm.price}
+                    onChange={e => setNewOrderForm({ ...newOrderForm, price: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label">Покупатель</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Имя покупателя"
+                    value={newOrderForm.buyer}
+                    onChange={e => setNewOrderForm({ ...newOrderForm, buyer: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="form-label">Город назначения</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Москва / Санкт-Петербург"
+                    value={newOrderForm.city}
+                    onChange={e => setNewOrderForm({ ...newOrderForm, city: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label">Служба доставки</label>
+                  <select
+                    className="form-input"
+                    value={newOrderForm.carrier}
+                    onChange={e => setNewOrderForm({ ...newOrderForm, carrier: e.target.value })}
+                  >
+                    <option value="СДЭК">СДЭК</option>
+                    <option value="Почта России">Почта России</option>
+                    <option value="Boxberry">Boxberry</option>
+                    <option value="Avito Exmail">Avito Exmail</option>
+                    <option value="DPD">DPD</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label">Статус заказа</label>
+                  <select
+                    className="form-input"
+                    value={newOrderForm.status}
+                    onChange={e => setNewOrderForm({ ...newOrderForm, status: e.target.value })}
+                  >
+                    <option value="completed">Успешно завершен и выплачен</option>
+                    <option value="in_transit">В пути к покупателю</option>
+                    <option value="ready_for_pickup">Ожидает в пункте выдачи</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', marginTop: '10px' }}>
+                <button type="button" className="btn-secondary" style={{ flex: 1 }} onClick={() => setIsAddModalOpen(false)}>
+                  Отмена
+                </button>
+                <button type="submit" className="btn-primary" style={{ flex: 1 }}>
+                  Сохранить в историю
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

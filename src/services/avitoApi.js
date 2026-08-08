@@ -1,8 +1,9 @@
-// Service for interacting with Avito API with Rate-Limiting and Token Caching
+// Service for interacting with Avito API with Rate-Limiting, Token Caching, and Delivery History
 
 const API_KEYS_STORAGE_KEY = 'avito_api_credentials';
 const DISCOVERED_ITEMS_KEY = 'avito_cached_item_ids';
 const TOKEN_CACHE_KEY = 'avito_cached_access_token';
+const MANUAL_DELIVERY_ORDERS_KEY = 'avito_manual_delivery_orders';
 
 export const getStoredCredentials = () => {
   try {
@@ -31,12 +32,28 @@ export const clearCredentials = () => {
   localStorage.removeItem(TOKEN_CACHE_KEY);
 };
 
+// Local storage management for custom/historical delivery orders
+export const getStoredManualDeliveryOrders = () => {
+  try {
+    const saved = localStorage.getItem(MANUAL_DELIVERY_ORDERS_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+export const saveManualDeliveryOrder = (newOrder) => {
+  const existing = getStoredManualDeliveryOrders();
+  const updated = [newOrder, ...existing.filter(o => o.id !== newOrder.id && o.trackNumber !== newOrder.trackNumber)];
+  localStorage.setItem(MANUAL_DELIVERY_ORDERS_KEY, JSON.stringify(updated));
+  return updated;
+};
+
 // Helper sleep function for API Throttling
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Authenticate via OAuth 2.0 Client Credentials with LocalStorage Token Caching (1 Hour)
 export const fetchAccessToken = async (clientId, clientSecret) => {
-  // Check cached token validity first to prevent spamming /token endpoint
   try {
     const cached = localStorage.getItem(TOKEN_CACHE_KEY);
     if (cached) {
@@ -72,7 +89,7 @@ export const fetchAccessToken = async (clientId, clientSecret) => {
 
   const data = await response.json();
   const token = data.access_token;
-  const expiresInMs = (data.expires_in || 3600) * 1000 - 60000; // Cache minus 1 minute safety buffer
+  const expiresInMs = (data.expires_in || 3600) * 1000 - 60000;
 
   try {
     localStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify({
@@ -90,6 +107,7 @@ function extractItemsFromPayload(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data.chats)) return data.chats;
   if (Array.isArray(data.orders)) return data.orders;
+  if (Array.isArray(data.operations)) return data.operations;
   if (Array.isArray(data.resources)) return data.resources;
   if (Array.isArray(data.items)) return data.items;
   if (Array.isArray(data.result)) return data.result;
@@ -97,7 +115,7 @@ function extractItemsFromPayload(data) {
   return [];
 }
 
-// Fetch real Avito Messenger Chats with rate limiting
+// Fetch real Avito Messenger Chats
 export const fetchAvitoChats = async () => {
   const creds = getStoredCredentials();
   if (!creds || !creds.clientId || !creds.clientSecret) return null;
@@ -110,7 +128,7 @@ export const fetchAvitoChats = async () => {
     if (!userRes.ok) return null;
     const user = await userRes.json();
 
-    await sleep(200); // Throttling
+    await sleep(200);
 
     const chatsRes = await fetch(`/avito-api/messenger/v2/accounts/${user.id}/chats?unread_only=false&limit=30`, {
       headers: { Authorization: `Bearer ${token}` }
@@ -175,51 +193,116 @@ export const sendAvitoChatMessage = async (chatId, text) => {
   }
 };
 
-// Fetch real Avito Delivery Orders
+// Comprehensive Fetcher for Real & Historical Avito Delivery Orders
 export const fetchAvitoDeliveryOrders = async () => {
   const creds = getStoredCredentials();
-  if (!creds || !creds.clientId || !creds.clientSecret) return null;
+  const manualSaved = getStoredManualDeliveryOrders();
 
-  try {
-    const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
-    const userRes = await fetch('/avito-api/core/v1/accounts/self', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!userRes.ok) return null;
-    const user = await userRes.json();
+  let fetchedOrders = [];
 
-    await sleep(200); // Throttling
+  if (creds && creds.clientId && creds.clientSecret) {
+    try {
+      const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
+      const userRes = await fetch('/avito-api/core/v1/accounts/self', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (userRes.ok) {
+        const user = await userRes.json();
 
-    const ordersRes = await fetch(`/avito-api/core/v1/accounts/${user.id}/orders`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+        // 1. Query general orders endpoint
+        try {
+          const res1 = await fetch(`/avito-api/core/v1/accounts/${user.id}/orders?limit=100`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res1.ok) {
+            const data1 = await res1.json();
+            fetchedOrders = fetchedOrders.concat(extractItemsFromPayload(data1));
+          }
+        } catch (e) {}
 
-    if (ordersRes.ok) {
-      const data = await ordersRes.json();
-      const rawOrders = extractItemsFromPayload(data);
-      if (rawOrders.length > 0) {
-        return rawOrders.map(o => ({
-          id: `del-${o.id || o.order_id}`,
-          trackNumber: o.tracking_number || o.track_code || `AV-${o.id}`,
-          buyer: o.buyer?.name || 'Покупатель Авито',
-          city: o.delivery_point?.city || 'Россия',
-          itemTitle: o.item?.title || 'Товар с Авито',
-          itemPrice: `${(o.price || 0).toLocaleString('ru-RU')} ₽`,
-          payoutAmount: Math.round((o.price || 0) * 0.97),
-          feeAmount: Math.round((o.price || 0) * 0.03),
-          carrier: o.carrier || 'СДЭК',
-          carrierColor: '#10b981',
-          status: o.status === 'delivered' ? 'completed' : 'in_transit',
-          statusText: o.status_title || 'В процессе доставки',
-          eta: o.delivery_date || 'В ближайшие дни',
-          date: new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' })
-        }));
+        await sleep(200);
+
+        // 2. Query completed/history orders status endpoint
+        try {
+          const res2 = await fetch(`/avito-api/core/v1/accounts/${user.id}/orders?status=completed&limit=100`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res2.ok) {
+            const data2 = await res2.json();
+            fetchedOrders = fetchedOrders.concat(extractItemsFromPayload(data2));
+          }
+        } catch (e) {}
+
+        await sleep(200);
+
+        // 3. Query financial operations for historical payout transactions
+        try {
+          const res3 = await fetch(`/avito-api/user/v1/accounts/${user.id}/operations?limit=100`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res3.ok) {
+            const data3 = await res3.json();
+            const ops = extractItemsFromPayload(data3);
+            ops.forEach(op => {
+              if (op.amount && op.amount > 0) {
+                fetchedOrders.push({
+                  id: op.operation_id || op.id || `op-${Date.now()}`,
+                  tracking_number: op.track_number || op.tracking_number || `AV-${op.id || Math.floor(Math.random()*899999 + 100000)}`,
+                  buyer: { name: op.description || 'Покупатель Авито' },
+                  item: { title: op.item_title || op.title || 'Доставка товара с Авито' },
+                  price: Math.round(op.amount * 1.03),
+                  status: 'completed',
+                  status_title: 'Выплачено за доставку',
+                  carrier: op.service_name || 'Авито Доставка',
+                  delivery_date: op.updated_at || op.date || 'Завершен'
+                });
+              }
+            });
+          }
+        } catch (e) {}
       }
+    } catch (e) {
+      console.warn('Ошибка забора доставок с API:', e);
     }
-  } catch (e) {
-    console.warn('Откат на локальные данные доставок:', e);
   }
-  return null;
+
+  // Deduplicate fetched orders by ID or Track Number
+  const ordersMap = {};
+
+  // First add manual saved orders
+  manualSaved.forEach(o => {
+    if (o && o.id) ordersMap[o.id] = o;
+  });
+
+  // Then add fetched API orders
+  fetchedOrders.forEach(o => {
+    if (!o) return;
+    const realId = `del-${o.id || o.order_id || o.tracking_number}`;
+    const priceNum = Number(o.price || 0);
+    const statusClean = (o.status === 'delivered' || o.status === 'completed' || o.status === 'closed' || o.status === 'paid')
+      ? 'completed'
+      : (o.status === 'cancelled' ? 'cancelled' : 'in_transit');
+
+    ordersMap[realId] = {
+      id: realId,
+      trackNumber: o.tracking_number || o.track_code || `AV-${o.id || Math.floor(Math.random()*899999 + 100000)}`,
+      buyer: o.buyer?.name || 'Покупатель Авито',
+      city: o.delivery_point?.city || o.city || 'Россия',
+      itemTitle: o.item?.title || o.title || 'Товар с Авито',
+      itemPrice: `${priceNum.toLocaleString('ru-RU')} ₽`,
+      payoutAmount: priceNum > 0 ? Math.round(priceNum * 0.97) : 0,
+      feeAmount: priceNum > 0 ? Math.round(priceNum * 0.03) : 0,
+      carrier: o.carrier || 'СДЭК',
+      carrierColor: '#10b981',
+      status: statusClean,
+      statusText: o.status_title || (statusClean === 'completed' ? 'Завершен и Выплачен' : 'В процессе доставки'),
+      eta: o.delivery_date || 'Выполнено',
+      date: o.delivery_date || new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' })
+    };
+  });
+
+  return Object.values(ordersMap);
 };
 
 // Helper function to aggregate metrics from any Avito JSON structure
@@ -298,9 +381,9 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         rawDebugInfo.userInfo = userInfo;
       }
 
-      await sleep(250); // Safe delay between API endpoints
+      await sleep(250);
 
-      // Step 2: Single, clean query to GET /core/v1/items (avoiding request spamming)
+      // Step 2: Single, clean query to GET /core/v1/items
       let allDiscovered = [];
       try {
         const res = await fetch('/avito-api/core/v1/items?per_page=100', {
@@ -360,7 +443,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
       dateFromObj.setDate(dateFromObj.getDate() - days);
       const dateFrom = dateFromObj.toISOString().split('T')[0];
 
-      await sleep(250); // Safe delay
+      await sleep(250);
 
       // Step 3: Fetch statistics for all target Item IDs (numbers)
       let statsMap = {};
