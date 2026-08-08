@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Search, Send, CheckCheck, Clock, User, Sparkles, MessageSquare, ShoppingBag, ExternalLink, Zap } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, Send, CheckCheck, MessageSquare, Zap, RefreshCw, Loader2 } from 'lucide-react';
+import { fetchAvitoChats, sendAvitoChatMessage } from '../services/avitoApi';
 
 export default function ChatsView() {
   const [chats, setChats] = useState([
@@ -38,7 +39,6 @@ export default function ChatsView() {
       avatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=100&auto=format&fit=crop&q=80',
       itemTitle: 'Игровой ПК Core i7 13700KF / RTX 4080',
       itemPrice: '189 000 ₽',
-      itemImg: 'https://images.unsplash.com/photo-1587202372775-e229f172b9d7?w=100&auto=format&fit=crop&q=80',
       unread: 1,
       lastTime: '11:15',
       messages: [
@@ -51,6 +51,28 @@ export default function ChatsView() {
   const [inputMessage, setInputMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterUnread, setFilterUnread] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isRealData, setIsRealData] = useState(false);
+
+  const loadRealChats = async () => {
+    setIsLoading(true);
+    try {
+      const real = await fetchAvitoChats();
+      if (real && real.length > 0) {
+        setChats(real);
+        setActiveChatId(real[0].id);
+        setIsRealData(true);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRealChats();
+  }, []);
 
   const activeChat = chats.find(c => c.id === activeChatId) || chats[0];
 
@@ -61,7 +83,7 @@ export default function ChatsView() {
     '💰 Сделаю скидку 5% при заказе прямо сейчас!'
   ];
 
-  const handleSendMessage = (textToSend = null) => {
+  const handleSendMessage = async (textToSend = null) => {
     const text = textToSend || inputMessage;
     if (!text.trim()) return;
 
@@ -85,10 +107,10 @@ export default function ChatsView() {
     }));
 
     if (!textToSend) setInputMessage('');
-  };
 
-  const handleQuickReply = (template) => {
-    handleSendMessage(template);
+    if (isRealData) {
+      await sendAvitoChatMessage(activeChatId, text);
+    }
   };
 
   const filteredChats = chats.filter(c => {
@@ -107,23 +129,32 @@ export default function ChatsView() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <MessageSquare size={18} color="var(--primary-avito)" />
-              Сообщения Авито
+              Сообщения
             </h3>
-            <button
-              onClick={() => setFilterUnread(!filterUnread)}
-              style={{
-                background: filterUnread ? 'rgba(0, 170, 142, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                border: `1px solid ${filterUnread ? 'var(--primary-avito)' : 'var(--border-color)'}`,
-                color: filterUnread ? '#00aa8e' : 'var(--text-muted)',
-                padding: '4px 8px',
-                borderRadius: '6px',
-                fontSize: '11px',
-                fontWeight: '600',
-                cursor: 'pointer'
-              }}
-            >
-              Непрочитанные
-            </button>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={loadRealChats}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}
+                title="Обновить сообщения"
+              >
+                {isLoading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+              </button>
+              <button
+                onClick={() => setFilterUnread(!filterUnread)}
+                style={{
+                  background: filterUnread ? 'rgba(0, 170, 142, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                  border: `1px solid ${filterUnread ? 'var(--primary-avito)' : 'var(--border-color)'}`,
+                  color: filterUnread ? '#00aa8e' : 'var(--text-muted)',
+                  padding: '4px 8px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                Непрочитанные
+              </button>
+            </div>
           </div>
 
           <div className="search-input-box" style={{ width: '100%' }}>
@@ -228,7 +259,7 @@ export default function ChatsView() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255, 255, 255, 0.04)', padding: '8px 14px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-            <img src={activeChat.itemImg} alt={activeChat.itemTitle} style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'cover' }} />
+            <img src={activeChat.itemImg || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=100&auto=format&fit=crop&q=80'} alt={activeChat.itemTitle} style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'cover' }} />
             <div>
               <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-main)' }}>{activeChat.itemTitle}</div>
               <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--primary-avito)' }}>{activeChat.itemPrice}</div>
@@ -281,7 +312,7 @@ export default function ChatsView() {
           {quickTemplates.map((tmpl, i) => (
             <button
               key={i}
-              onClick={() => handleQuickReply(tmpl)}
+              onClick={() => handleSendMessage(tmpl)}
               style={{
                 whiteSpace: 'nowrap',
                 background: 'rgba(0, 170, 142, 0.1)',

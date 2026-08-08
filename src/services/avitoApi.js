@@ -56,12 +56,135 @@ export const fetchAccessToken = async (clientId, clientSecret) => {
 function extractItemsFromPayload(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data;
+  if (Array.isArray(data.chats)) return data.chats;
+  if (Array.isArray(data.orders)) return data.orders;
   if (Array.isArray(data.resources)) return data.resources;
   if (Array.isArray(data.items)) return data.items;
   if (Array.isArray(data.result)) return data.result;
   if (Array.isArray(data.data)) return data.data;
   return [];
 }
+
+// Fetch real Avito Messenger Chats
+export const fetchAvitoChats = async () => {
+  const creds = getStoredCredentials();
+  if (!creds || !creds.clientId || !creds.clientSecret) return null;
+
+  try {
+    const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
+    const userRes = await fetch('/avito-api/core/v1/accounts/self', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!userRes.ok) return null;
+    const user = await userRes.json();
+
+    const chatsRes = await fetch(`/avito-api/messenger/v2/accounts/${user.id}/chats?unread_only=false&limit=50`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (chatsRes.ok) {
+      const data = await chatsRes.json();
+      const rawChats = extractItemsFromPayload(data);
+      if (rawChats.length > 0) {
+        return rawChats.map(c => ({
+          id: c.id,
+          user: c.users?.[0]?.name || c.title || `Покупатель ${c.id.slice(0, 6)}`,
+          avatar: c.users?.[0]?.avatar?.images?.['100x100'] || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80',
+          itemTitle: c.context?.value?.title || 'Объявление на Авито',
+          itemPrice: c.context?.value?.price ? `${c.context.value.price.toLocaleString('ru-RU')} ₽` : 'Цена по запросу',
+          itemImg: c.context?.value?.images?.['100x100'] || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=100&auto=format&fit=crop&q=80',
+          unread: c.unread_count || 0,
+          lastTime: c.updated_at ? new Date(c.updated_at * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'Недавно',
+          messages: (c.last_message ? [{
+            id: c.last_message.id,
+            sender: c.last_message.author_id === user.id ? 'me' : 'user',
+            text: c.last_message.content?.text || 'Сообщение',
+            time: new Date((c.last_message.created || Date.now() / 1000) * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+          }] : [])
+        }));
+      }
+    }
+  } catch (e) {
+    console.warn('Откат на локальные данные чатов:', e);
+  }
+  return null;
+};
+
+// Send message via real Avito Messenger API
+export const sendAvitoChatMessage = async (chatId, text) => {
+  const creds = getStoredCredentials();
+  if (!creds || !creds.clientId || !creds.clientSecret) return false;
+
+  try {
+    const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
+    const userRes = await fetch('/avito-api/core/v1/accounts/self', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!userRes.ok) return false;
+    const user = await userRes.json();
+
+    const res = await fetch(`/avito-api/messenger/v1/accounts/${user.id}/chats/${chatId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: { text },
+        type: 'text'
+      })
+    });
+    return res.ok;
+  } catch (e) {
+    console.error('Ошибка отправки сообщения через Avito API:', e);
+    return false;
+  }
+};
+
+// Fetch real Avito Delivery Orders
+export const fetchAvitoDeliveryOrders = async () => {
+  const creds = getStoredCredentials();
+  if (!creds || !creds.clientId || !creds.clientSecret) return null;
+
+  try {
+    const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
+    const userRes = await fetch('/avito-api/core/v1/accounts/self', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!userRes.ok) return null;
+    const user = await userRes.json();
+
+    const ordersRes = await fetch(`/avito-api/core/v1/accounts/${user.id}/orders`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (ordersRes.ok) {
+      const data = await ordersRes.json();
+      const rawOrders = extractItemsFromPayload(data);
+      if (rawOrders.length > 0) {
+        return rawOrders.map(o => ({
+          id: `del-${o.id || o.order_id}`,
+          trackNumber: o.tracking_number || o.track_code || `AV-${o.id}`,
+          buyer: o.buyer?.name || 'Покупатель Авито',
+          city: o.delivery_point?.city || 'Россия',
+          itemTitle: o.item?.title || 'Товар с Авито',
+          itemPrice: `${(o.price || 0).toLocaleString('ru-RU')} ₽`,
+          payoutAmount: Math.round((o.price || 0) * 0.97),
+          feeAmount: Math.round((o.price || 0) * 0.03),
+          carrier: o.carrier || 'СДЭК',
+          carrierColor: '#10b981',
+          status: o.status === 'delivered' ? 'completed' : 'in_transit',
+          statusText: o.status_title || 'В процессе доставки',
+          eta: o.delivery_date || 'В ближайшие дни',
+          date: new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' })
+        }));
+      }
+    }
+  } catch (e) {
+    console.warn('Откат на локальные данные доставок:', e);
+  }
+  return null;
+};
 
 // Helper function to aggregate metrics from any Avito JSON structure
 function parseItemMetrics(stRaw) {

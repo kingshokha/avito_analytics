@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, RefreshCw, Loader2 } from 'lucide-react';
+import { fetchAvitoDeliveryOrders } from '../services/avitoApi';
 
 export default function DeliveryView() {
   const [orders, setOrders] = useState([
@@ -71,6 +72,25 @@ export default function DeliveryView() {
 
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const loadRealDelivery = async () => {
+    setIsLoading(true);
+    try {
+      const real = await fetchAvitoDeliveryOrders();
+      if (real && real.length > 0) {
+        setOrders(real);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRealDelivery();
+  }, []);
 
   const totalOrdersCount = orders.length;
   const inTransitCount = orders.filter(o => o.status === 'in_transit').length;
@@ -172,8 +192,15 @@ export default function DeliveryView() {
       <div className="glass-card table-card">
         <div className="table-controls" style={{ flexWrap: 'wrap', gap: '16px' }}>
           <div>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
               Мониторинг Авито Доставки
+              <button
+                onClick={loadRealDelivery}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
+                title="Обновить список доставок"
+              >
+                {isLoading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+              </button>
             </h3>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
               Отслеживание статусов отправлений, трек-номеров и зачислений
