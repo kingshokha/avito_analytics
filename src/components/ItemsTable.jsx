@@ -1,9 +1,19 @@
 import React, { useState } from 'react';
-import { Search, Filter, ArrowUpDown, ExternalLink, Zap } from 'lucide-react';
+import { Search, ArrowUpDown, Zap, CheckCircle2, Archive, Trash2, AlertCircle, FileText, Ban } from 'lucide-react';
+
+const STATUS_MAP = {
+  active: { label: 'Активное', color: '#34d399', bg: 'rgba(16, 185, 129, 0.15)', icon: CheckCircle2 },
+  old: { label: 'Архив', color: '#cbd5e1', bg: 'rgba(148, 163, 184, 0.15)', icon: Archive },
+  removed: { label: 'Удалено', color: '#fb7185', bg: 'rgba(244, 63, 94, 0.15)', icon: Trash2 },
+  blocked: { label: 'Заблокировано', color: '#fbbf24', bg: 'rgba(245, 158, 11, 0.15)', icon: Ban },
+  rejected: { label: 'Отклонено', color: '#f87171', bg: 'rgba(239, 68, 68, 0.15)', icon: AlertCircle },
+  draft: { label: 'Черновик', color: '#c084fc', bg: 'rgba(139, 92, 246, 0.15)', icon: FileText },
+  unpublished: { label: 'Неопубликовано', color: '#94a3b8', bg: 'rgba(100, 116, 139, 0.15)', icon: FileText }
+};
 
 export default function ItemsTable({ items }) {
   const [searchTerm, setSearchTerm] = useState('');
-  // Default sorting: Newest items first (numericId descending)
+  const [statusFilter, setStatusFilter] = useState('all');
   const [sortField, setSortField] = useState('numericId');
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -19,10 +29,21 @@ export default function ItemsTable({ items }) {
   };
 
   const filteredItems = items
-    .filter(item => 
-      item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.category.toLowerCase().includes(searchTerm.toLowerCase())
-    )
+    .filter(item => {
+      // Search filter
+      const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                            item.category.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      // Status tab filter
+      if (statusFilter === 'all') return matchesSearch;
+      if (statusFilter === 'active') return matchesSearch && (item.status === 'active' || item.status === 'promo');
+      if (statusFilter === 'old') return matchesSearch && item.status === 'old';
+      if (statusFilter === 'removed') return matchesSearch && item.status === 'removed';
+      if (statusFilter === 'draft') return matchesSearch && (item.status === 'draft' || item.status === 'unpublished');
+      if (statusFilter === 'blocked') return matchesSearch && (item.status === 'blocked' || item.status === 'rejected');
+      
+      return matchesSearch;
+    })
     .sort((a, b) => {
       let valA = a[sortField];
       let valB = b[sortField];
@@ -40,6 +61,37 @@ export default function ItemsTable({ items }) {
       return 0;
     });
 
+  const getStatusBadge = (statusKey) => {
+    const cfg = STATUS_MAP[statusKey] || STATUS_MAP.active;
+    const Icon = cfg.icon;
+    return (
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '4px 10px',
+        borderRadius: '20px',
+        fontSize: '11px',
+        fontWeight: '700',
+        color: cfg.color,
+        background: cfg.bg,
+        border: `1px solid ${cfg.color}30`
+      }}>
+        <Icon size={12} color={cfg.color} />
+        <span>{cfg.label}</span>
+      </span>
+    );
+  };
+
+  const statusTabs = [
+    { id: 'all', label: 'Все' },
+    { id: 'active', label: '🟢 Активные' },
+    { id: 'old', label: '⚪ Архив' },
+    { id: 'draft', label: '🟣 Черновики & Неопубликованные' },
+    { id: 'removed', label: '🔴 Удаленные' },
+    { id: 'blocked', label: '🟠 Блок & Отклоненные' }
+  ];
+
   return (
     <div className="glass-card table-card fade-in">
       <div className="table-controls">
@@ -48,7 +100,7 @@ export default function ItemsTable({ items }) {
             Эффективность Объявлений
           </h3>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Статистика по активным и продвигаемым позициям на Авито (по умолчанию сначала новые)
+            Статистика по объектам (по умолчанию первыми идут новые публикации)
           </p>
         </div>
 
@@ -63,6 +115,29 @@ export default function ItemsTable({ items }) {
         </div>
       </div>
 
+      {/* Avito Status Category Filter Tabs */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px', paddingBottom: '14px', borderBottom: '1px solid var(--border-color)' }}>
+        {statusTabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setStatusFilter(t.id)}
+            style={{
+              background: statusFilter === t.id ? 'rgba(0, 170, 142, 0.2)' : 'rgba(15, 23, 42, 0.4)',
+              color: statusFilter === t.id ? 'var(--primary-avito)' : 'var(--text-muted)',
+              border: `1px solid ${statusFilter === t.id ? 'var(--primary-avito)' : 'rgba(255,255,255,0.08)'}`,
+              padding: '6px 14px',
+              borderRadius: '8px',
+              fontSize: '12px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div style={{ overflowX: 'auto' }}>
         <table className="custom-table">
           <thead>
@@ -72,6 +147,7 @@ export default function ItemsTable({ items }) {
                   Объявление <ArrowUpDown size={12} />
                 </div>
               </th>
+              <th>Статус на Авито</th>
               <th onClick={() => handleSort('price')} style={{ cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   Актуальная Цена <ArrowUpDown size={12} />
@@ -107,6 +183,9 @@ export default function ItemsTable({ items }) {
                       <div className="item-category">ID: {item.id} • {item.category}</div>
                     </div>
                   </div>
+                </td>
+                <td>
+                  {getStatusBadge(item.status)}
                 </td>
                 <td>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
