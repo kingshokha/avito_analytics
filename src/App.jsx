@@ -5,7 +5,6 @@ import MetricsOverview from './components/MetricsOverview';
 import AnalyticsCharts from './components/AnalyticsCharts';
 import ItemsTable from './components/ItemsTable';
 import CampaignsView from './components/CampaignsView';
-import ChatsView from './components/ChatsView';
 import DeliveryView from './components/DeliveryView';
 import ApiSettingsModal from './components/ApiSettingsModal';
 import { fetchDashboardData, getStoredCredentials } from './services/avitoApi';
@@ -111,10 +110,6 @@ export default function App() {
                 <ItemsTable items={dashboardData.items} />
               )}
 
-              {activeTab === 'chats' && (
-                <ChatsView />
-              )}
-
               {activeTab === 'delivery' && (
                 <DeliveryView />
               )}
@@ -129,7 +124,7 @@ export default function App() {
                     Интеграция с Avito API
                   </h3>
                   <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginBottom: '24px', lineHeight: '1.6' }}>
-                    Подключите ваш личный кабинет Avito для профессионалов, чтобы получать реальные данные о просмотрах, контактах, расходах и сообщениях чата в режиме реального времени.
+                    Подключите ваш личный кабинет Avito для профессионалов, чтобы получать реальные данные о просмотрах, контактах и расходах в режиме реального времени.
                   </p>
                   <button className="btn-primary" onClick={() => setIsSettingsOpen(true)}>
                     Открыть форму подключения Avito API

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, RefreshCw, Loader2, Inbox } from 'lucide-react';
+import { Truck, Package, Clock, CheckCircle2, DollarSign, MapPin, Search, ArrowUpRight, ShieldCheck, RefreshCw, Loader2, History, Archive, Check } from 'lucide-react';
 import { fetchAvitoDeliveryOrders } from '../services/avitoApi';
 
 export default function DeliveryView() {
   const [orders, setOrders] = useState([]);
+  const [activeTabSection, setActiveTabSection] = useState('active'); // 'active' or 'history'
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -29,14 +30,22 @@ export default function DeliveryView() {
     loadRealDelivery();
   }, []);
 
+  // Separate active vs historical orders
+  const activeOrders = orders.filter(o => o.status === 'in_transit' || o.status === 'ready_for_pickup');
+  const historyOrders = orders.filter(o => o.status === 'completed' || o.status === 'cancelled' || o.status === 'delivered');
+
+  const currentDisplayOrders = activeTabSection === 'active' ? activeOrders : historyOrders;
+
   const totalOrdersCount = orders.length;
-  const inTransitCount = orders.filter(o => o.status === 'in_transit').length;
-  const readyCount = orders.filter(o => o.status === 'ready_for_pickup').length;
+  const inTransitCount = activeOrders.filter(o => o.status === 'in_transit').length;
+  const readyCount = activeOrders.filter(o => o.status === 'ready_for_pickup').length;
+  const completedCount = historyOrders.filter(o => o.status === 'completed' || o.status === 'delivered').length;
+  
   const totalPayout = orders
     .filter(o => o.status === 'completed' || o.status === 'in_transit' || o.status === 'ready_for_pickup')
-    .reduce((sum, o) => sum + o.payoutAmount, 0);
+    .reduce((sum, o) => sum + (o.payoutAmount || 0), 0);
 
-  const filteredOrders = orders.filter(o => {
+  const filteredOrders = currentDisplayOrders.filter(o => {
     const matchesSearch = (o.buyer || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (o.trackNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (o.itemTitle || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -51,30 +60,76 @@ export default function DeliveryView() {
         return (
           <span className="status-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
             <Truck size={12} style={{ display: 'inline', marginRight: '4px' }} />
-            {text}
+            {text || 'В пути'}
           </span>
         );
       case 'ready_for_pickup':
         return (
           <span className="status-badge" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }}>
             <MapPin size={12} style={{ display: 'inline', marginRight: '4px' }} />
-            {text}
+            {text || 'Ожидает в ПВЗ'}
           </span>
         );
       case 'completed':
+      case 'delivered':
         return (
           <span className="status-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }}>
             <CheckCircle2 size={12} style={{ display: 'inline', marginRight: '4px' }} />
-            {text}
+            {text || 'Получен и Выплачен'}
           </span>
         );
       default:
-        return <span className="status-badge active">{text}</span>;
+        return <span className="status-badge active">{text || 'Обработан'}</span>;
     }
   };
 
   return (
     <div className="fade-in">
+      {/* Sub-navigation tabs: Active vs History */}
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+        <button
+          onClick={() => { setActiveTabSection('active'); setStatusFilter('all'); }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '12px 20px',
+            borderRadius: '12px',
+            border: `1px solid ${activeTabSection === 'active' ? 'var(--primary-avito)' : 'var(--border-color)'}`,
+            background: activeTabSection === 'active' ? 'rgba(0, 170, 142, 0.15)' : 'rgba(15, 23, 42, 0.6)',
+            color: activeTabSection === 'active' ? '#00aa8e' : 'var(--text-muted)',
+            fontSize: '14px',
+            fontWeight: '700',
+            cursor: 'pointer',
+            transition: 'all 0.2s'
+          }}
+        >
+          <Truck size={18} />
+          <span>Активные доставки ({activeOrders.length})</span>
+        </button>
+
+        <button
+          onClick={() => { setActiveTabSection('history'); setStatusFilter('all'); }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '12px 20px',
+            borderRadius: '12px',
+            border: `1px solid ${activeTabSection === 'history' ? 'var(--primary-avito)' : 'var(--border-color)'}`,
+            background: activeTabSection === 'history' ? 'rgba(0, 170, 142, 0.15)' : 'rgba(15, 23, 42, 0.6)',
+            color: activeTabSection === 'history' ? '#00aa8e' : 'var(--text-muted)',
+            fontSize: '14px',
+            fontWeight: '700',
+            cursor: 'pointer',
+            transition: 'all 0.2s'
+          }}
+        >
+          <History size={18} />
+          <span>История завершенных ({historyOrders.length})</span>
+        </button>
+      </div>
+
       {/* Top KPI Cards for Delivery */}
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
         <div className="glass-card kpi-card" style={{ '--card-color': '#00aa8e' }}>
@@ -91,36 +146,36 @@ export default function DeliveryView() {
 
         <div className="glass-card kpi-card" style={{ '--card-color': '#3b82f6' }}>
           <div className="kpi-header">
-            <span className="kpi-title">Заказы в пути</span>
+            <span className="kpi-title">В пути</span>
             <div className="kpi-icon-box"><Truck size={20} /></div>
           </div>
           <div className="kpi-value">{inTransitCount}</div>
           <div className="kpi-trend positive">
             <Clock size={14} />
-            <span>Отследить трек-код</span>
+            <span>Текущие посылки</span>
           </div>
         </div>
 
         <div className="glass-card kpi-card" style={{ '--card-color': '#f59e0b' }}>
           <div className="kpi-header">
-            <span className="kpi-title">Готовы к выдаче</span>
+            <span className="kpi-title">В пунктах выдачи</span>
             <div className="kpi-icon-box"><MapPin size={20} /></div>
           </div>
           <div className="kpi-value">{readyCount}</div>
           <div className="kpi-trend positive">
-            <span>В пунктах выдачи</span>
+            <span>Ожидают вручения</span>
           </div>
         </div>
 
         <div className="glass-card kpi-card" style={{ '--card-color': '#10b981' }}>
           <div className="kpi-header">
-            <span className="kpi-title">Сумма к выплате</span>
-            <div className="kpi-icon-box"><DollarSign size={20} /></div>
+            <span className="kpi-title">Успешно завершено</span>
+            <div className="kpi-icon-box"><CheckCircle2 size={20} /></div>
           </div>
-          <div className="kpi-value">{totalPayout.toLocaleString('ru-RU')} ₽</div>
+          <div className="kpi-value">{completedCount}</div>
           <div className="kpi-trend positive">
             <ShieldCheck size={14} />
-            <span>Безопасная сделка</span>
+            <span>История выплат ({totalPayout.toLocaleString('ru-RU')} ₽)</span>
           </div>
         </div>
       </div>
@@ -130,53 +185,28 @@ export default function DeliveryView() {
         <div className="table-controls" style={{ flexWrap: 'wrap', gap: '16px' }}>
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              Мониторинг Авито Доставки
+              {activeTabSection === 'active' ? '🚚 Активные отправления' : '📜 История выполненных доставок'}
               <button
                 onClick={loadRealDelivery}
                 style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
-                title="Обновить список доставок"
+                title="Обновить список отправок"
               >
                 <RefreshCw size={14} />
               </button>
             </h3>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Отслеживание статусов отправлений, трек-номеров и зачислений
+              {activeTabSection === 'active' 
+                ? 'Мониторинг заказов находящихся в процессе логистики и выдачи' 
+                : 'Архив всех успешно полученных и выплаченных на карту заказов Авито'}
             </p>
           </div>
 
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-            {/* Status Filter Pipeline Tabs */}
-            <div style={{ display: 'flex', gap: '6px', background: 'rgba(15, 23, 42, 0.6)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              {[
-                { id: 'all', label: 'Все заказы' },
-                { id: 'in_transit', label: 'В пути' },
-                { id: 'ready_for_pickup', label: 'В пункте' },
-                { id: 'completed', label: 'Выплачено' }
-              ].map(f => (
-                <button
-                  key={f.id}
-                  onClick={() => setStatusFilter(f.id)}
-                  style={{
-                    background: statusFilter === f.id ? 'var(--primary-avito)' : 'transparent',
-                    color: statusFilter === f.id ? '#fff' : 'var(--text-muted)',
-                    border: 'none',
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: '600',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="search-input-box" style={{ width: '260px' }}>
+            <div className="search-input-box" style={{ width: '280px' }}>
               <Search size={14} color="var(--text-muted)" />
               <input
                 type="text"
-                placeholder="Трек-код, имя, город..."
+                placeholder="Трек-код, имя покупателя, город..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -188,7 +218,7 @@ export default function DeliveryView() {
         {isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', gap: '16px' }}>
             <Loader2 className="animate-spin" size={32} color="var(--primary-avito)" />
-            <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Загрузка заказов Авито Доставки...</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Синхронизация истории доставок с Авито...</span>
           </div>
         ) : filteredOrders.length === 0 ? (
           <div style={{ padding: '60px 20px', textAlign: 'center' }}>
@@ -196,20 +226,24 @@ export default function DeliveryView() {
               width: '56px',
               height: '56px',
               borderRadius: '16px',
-              background: 'rgba(59, 130, 246, 0.12)',
+              background: activeTabSection === 'active' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(16, 185, 129, 0.12)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               margin: '0 auto 16px auto',
-              color: '#3b82f6'
+              color: activeTabSection === 'active' ? '#3b82f6' : '#10b981'
             }}>
-              <Truck size={28} />
+              {activeTabSection === 'active' ? <Truck size={28} /> : <History size={28} />}
             </div>
             <h4 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-main)', marginBottom: '6px' }}>
-              У вас пока нет заказов с Авито Доставкой
+              {activeTabSection === 'active' 
+                ? 'Нет активных заказов в процессе отправки' 
+                : 'История завершенных доставок пока пуста'}
             </h4>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', maxWidth: '480px', margin: '0 auto' }}>
-              Когда покупатели оформят заказ через Авито Доставку, статус отправки, трек-код и сумма зачисления появятся в этой таблице.
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', maxWidth: '500px', margin: '0 auto' }}>
+              {activeTabSection === 'active'
+                ? 'Когда покупатель оформит заказ Авито Доставкой, статус посылки и трек-номер отслеживания автоматически появятся здесь.'
+                : 'После того как покупатели заберут товары в ПВЗ и Авито перечислит вам деньги, завершенные сделки отобразятся в этой истории.'}
             </p>
           </div>
         ) : (
@@ -221,9 +255,9 @@ export default function DeliveryView() {
                   <th>Покупатель / Город</th>
                   <th>Служба Доставки</th>
                   <th>Сумма сделки</th>
-                  <th>К выплате</th>
-                  <th>Статус Доставки</th>
-                  <th>Срок доставки</th>
+                  <th>Выплата на карту</th>
+                  <th>Статус</th>
+                  <th>Дата завершения / Срок</th>
                 </tr>
               </thead>
               <tbody>
@@ -250,25 +284,27 @@ export default function DeliveryView() {
                         borderRadius: '6px',
                         fontSize: '12px',
                         fontWeight: '700',
-                        background: `${o.carrierColor}15`,
-                        color: o.carrierColor,
-                        border: `1px solid ${o.carrierColor}30`
+                        background: `${o.carrierColor || '#00aa8e'}15`,
+                        color: o.carrierColor || '#00aa8e',
+                        border: `1px solid ${o.carrierColor || '#00aa8e'}30`
                       }}>
                         <Truck size={12} />
-                        {o.carrier}
+                        {o.carrier || 'Авито'}
                       </span>
                     </td>
                     <td style={{ fontWeight: '700' }}>{o.itemPrice}</td>
                     <td>
                       <span style={{ fontWeight: '700', color: '#10b981' }}>
-                        {o.payoutAmount.toLocaleString('ru-RU')} ₽
+                        {o.payoutAmount ? `${o.payoutAmount.toLocaleString('ru-RU')} ₽` : o.itemPrice}
                       </span>
-                      <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-dim)' }}>
-                        Комиссия: {o.feeAmount} ₽
-                      </span>
+                      {o.feeAmount > 0 && (
+                        <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-dim)' }}>
+                          Комиссия: {o.feeAmount} ₽
+                        </span>
+                      )}
                     </td>
                     <td>{getStatusBadge(o.status, o.statusText)}</td>
-                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{o.eta}</td>
+                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{o.eta || o.date}</td>
                   </tr>
                 ))}
               </tbody>

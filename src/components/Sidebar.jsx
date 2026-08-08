@@ -1,12 +1,11 @@
 import React from 'react';
-import { LayoutDashboard, ShoppingBag, TrendingUp, MessageSquare, Truck, Settings, Zap } from 'lucide-react';
+import { LayoutDashboard, ShoppingBag, TrendingUp, Truck, Settings, Zap } from 'lucide-react';
 
 export default function Sidebar({ activeTab, setActiveTab, apiStatus, onOpenSettings }) {
   const menuItems = [
     { id: 'overview', label: 'Обзор и KPI', icon: LayoutDashboard },
     { id: 'items', label: 'Мои Объявления', icon: ShoppingBag },
-    { id: 'chats', label: 'Сообщения & CRM', icon: MessageSquare },
-    { id: 'delivery', label: 'Авито Доставка', icon: Truck },
+    { id: 'delivery', label: 'Авито Доставка & История', icon: Truck },
     { id: 'campaigns', label: 'Кампании и ROI', icon: TrendingUp },
     { id: 'settings', label: 'Интеграция API', icon: Settings }
   ];
