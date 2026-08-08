@@ -1,7 +1,8 @@
-// Service for interacting with Avito API and fallback state
+// Service for interacting with Avito API with Rate-Limiting and Token Caching
 
 const API_KEYS_STORAGE_KEY = 'avito_api_credentials';
 const DISCOVERED_ITEMS_KEY = 'avito_cached_item_ids';
+const TOKEN_CACHE_KEY = 'avito_cached_access_token';
 
 export const getStoredCredentials = () => {
   try {
@@ -20,16 +21,32 @@ export const saveCredentials = (clientId, clientSecret, customItemIds = '') => {
     connectedAt: new Date().toISOString() 
   };
   localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(payload));
+  localStorage.removeItem(TOKEN_CACHE_KEY); // Reset token on key change
   return payload;
 };
 
 export const clearCredentials = () => {
   localStorage.removeItem(API_KEYS_STORAGE_KEY);
   localStorage.removeItem(DISCOVERED_ITEMS_KEY);
+  localStorage.removeItem(TOKEN_CACHE_KEY);
 };
 
-// Authenticate via OAuth 2.0 Client Credentials
+// Helper sleep function for API Throttling
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Authenticate via OAuth 2.0 Client Credentials with LocalStorage Token Caching (1 Hour)
 export const fetchAccessToken = async (clientId, clientSecret) => {
+  // Check cached token validity first to prevent spamming /token endpoint
+  try {
+    const cached = localStorage.getItem(TOKEN_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed.token && parsed.expiresAt && Date.now() < parsed.expiresAt) {
+        return parsed.token;
+      }
+    }
+  } catch (e) {}
+
   const params = new URLSearchParams();
   params.append('grant_type', 'client_credentials');
   params.append('client_id', clientId);
@@ -49,7 +66,17 @@ export const fetchAccessToken = async (clientId, clientSecret) => {
   }
 
   const data = await response.json();
-  return data.access_token;
+  const token = data.access_token;
+  const expiresInMs = (data.expires_in || 3600) * 1000 - 60000; // Cache minus 1 minute safety buffer
+
+  try {
+    localStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify({
+      token,
+      expiresAt: Date.now() + expiresInMs
+    }));
+  } catch (e) {}
+
+  return token;
 };
 
 // Helper function to extract array of items from any API response structure
@@ -65,7 +92,7 @@ function extractItemsFromPayload(data) {
   return [];
 }
 
-// Fetch real Avito Messenger Chats
+// Fetch real Avito Messenger Chats with rate limiting
 export const fetchAvitoChats = async () => {
   const creds = getStoredCredentials();
   if (!creds || !creds.clientId || !creds.clientSecret) return null;
@@ -78,7 +105,9 @@ export const fetchAvitoChats = async () => {
     if (!userRes.ok) return null;
     const user = await userRes.json();
 
-    const chatsRes = await fetch(`/avito-api/messenger/v2/accounts/${user.id}/chats?unread_only=false&limit=50`, {
+    await sleep(200); // Throttling
+
+    const chatsRes = await fetch(`/avito-api/messenger/v2/accounts/${user.id}/chats?unread_only=false&limit=30`, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
@@ -153,6 +182,8 @@ export const fetchAvitoDeliveryOrders = async () => {
     });
     if (!userRes.ok) return null;
     const user = await userRes.json();
+
+    await sleep(200); // Throttling
 
     const ordersRes = await fetch(`/avito-api/core/v1/accounts/${user.id}/orders`, {
       headers: { Authorization: `Bearer ${token}` }
@@ -232,7 +263,7 @@ function parseItemMetrics(stRaw) {
   return { impressions, views, contacts, favorites, spend, daily };
 }
 
-// Main data fetching function supporting real API & fallback demo
+// Safe Single-Query Data Fetcher with Token Caching & Throttling
 export const fetchDashboardData = async (period = '30', forceDemo = false) => {
   const creds = getStoredCredentials();
   
@@ -247,7 +278,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
     };
 
     try {
-      console.log('Глубокое сканирование объявлений через Avito API...');
+      console.log('Безопасный запрос данных через Avito API...');
       const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
       rawDebugInfo.tokenAcquired = true;
       
@@ -262,68 +293,22 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         rawDebugInfo.userInfo = userInfo;
       }
 
-      // Step 2: Multi-Page & Multi-Status Auto-Discovery Pipeline
+      await sleep(250); // Safe delay between API endpoints
+
+      // Step 2: Single, clean query to GET /core/v1/items (avoiding request spamming)
       let allDiscovered = [];
-
-      // Query A: Paginated scan of GET /core/v1/items (Pages 1 to 5)
-      for (let page = 1; page <= 5; page++) {
-        try {
-          const res = await fetch(`/avito-api/core/v1/items?per_page=100&page=${page}`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (page === 1) rawDebugInfo.itemsResponse = data;
-            const list = extractItemsFromPayload(data);
-            if (list.length > 0) {
-              allDiscovered = allDiscovered.concat(list);
-            } else {
-              break;
-            }
-          } else {
-            if (page === 1) rawDebugInfo.itemsResponse = { error: await res.text(), status: res.status };
-            break;
-          }
-        } catch (e) { break; }
-      }
-
-      // Query B: Filter by specific status values
-      const statusList = ['active', 'old', 'removed', 'blocked', 'rejected'];
-      for (const st of statusList) {
-        try {
-          const res = await fetch(`/avito-api/core/v1/items?status=${st}&per_page=100`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            const list = extractItemsFromPayload(data);
-            if (list.length > 0) {
-              allDiscovered = allDiscovered.concat(list);
-            }
-          }
-        } catch (e) {}
-      }
-
-      // Query C: Check Autoload report items if available
-      if (userInfo.id) {
-        try {
-          const autoRes = await fetch(`/avito-api/autoload/v1/accounts/${userInfo.id}/reports/last_report/`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (autoRes.ok) {
-            const autoData = await autoRes.json();
-            rawDebugInfo.autoloadReport = autoData;
-            const autoList = extractItemsFromPayload(autoData.report || autoData);
-            if (autoList.length > 0) {
-              allDiscovered = allDiscovered.concat(autoList.map(it => ({
-                id: it.avito_id || it.itemId || it.id || it.item_id,
-                title: it.title || `Объявление #${it.avito_id || it.id}`,
-                price: it.price
-              })));
-            }
-          }
-        } catch (e) {}
-      }
+      try {
+        const res = await fetch('/avito-api/core/v1/items?per_page=100', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          rawDebugInfo.itemsResponse = data;
+          allDiscovered = extractItemsFromPayload(data);
+        } else {
+          rawDebugInfo.itemsResponse = { error: await res.text(), status: res.status };
+        }
+      } catch (e) {}
 
       // Read stored/cached item IDs
       let cachedIds = [];
@@ -341,7 +326,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
           .filter(Boolean);
       }
 
-      // Deduplicate discovered items by any ID property variant
+      // Deduplicate discovered items
       const itemsMapById = {};
       allDiscovered.forEach(it => {
         if (!it) return;
@@ -369,6 +354,8 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
       const dateFromObj = new Date();
       dateFromObj.setDate(dateFromObj.getDate() - days);
       const dateFrom = dateFromObj.toISOString().split('T')[0];
+
+      await sleep(250); // Safe delay
 
       // Step 3: Fetch statistics for all target Item IDs (numbers)
       let statsMap = {};
