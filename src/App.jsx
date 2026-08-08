@@ -4,8 +4,6 @@ import Header from './components/Header';
 import MetricsOverview from './components/MetricsOverview';
 import AnalyticsCharts from './components/AnalyticsCharts';
 import ItemsTable from './components/ItemsTable';
-import CampaignsView from './components/CampaignsView';
-import DeliveryView from './components/DeliveryView';
 import ApiSettingsModal from './components/ApiSettingsModal';
 import { fetchDashboardData, getStoredCredentials } from './services/avitoApi';
 import { AlertCircle, CheckCircle, Info, Loader2, Bug, ChevronDown, ChevronUp } from 'lucide-react';
@@ -110,21 +108,13 @@ export default function App() {
                 <ItemsTable items={dashboardData.items} />
               )}
 
-              {activeTab === 'delivery' && (
-                <DeliveryView />
-              )}
-
-              {activeTab === 'campaigns' && dashboardData && (
-                <CampaignsView spendDistribution={dashboardData.spendDistribution} />
-              )}
-
               {activeTab === 'settings' && (
                 <div className="glass-card" style={{ padding: '32px', maxWidth: '640px', margin: '0 auto' }}>
                   <h3 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '12px' }}>
                     Интеграция с Avito API
                   </h3>
                   <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginBottom: '24px', lineHeight: '1.6' }}>
-                    Подключите ваш личный кабинет Avito для профессионалов, чтобы получать реальные данные о просмотрах, контактах и расходах в режиме реального времени.
+                    Подключите ваш личный кабинет Avito для профессионалов, чтобы получать реальные данные о просмотрах, контактах, расходах и сообщениях чата в режиме реального времени.
                   </p>
                   <button className="btn-primary" onClick={() => setIsSettingsOpen(true)}>
                     Открыть форму подключения Avito API

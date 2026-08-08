@@ -1,12 +1,10 @@
 import React from 'react';
-import { LayoutDashboard, ShoppingBag, TrendingUp, Truck, Settings, Zap } from 'lucide-react';
+import { LayoutDashboard, ShoppingBag, Settings, Zap } from 'lucide-react';
 
 export default function Sidebar({ activeTab, setActiveTab, apiStatus, onOpenSettings }) {
   const menuItems = [
     { id: 'overview', label: 'Обзор и KPI', icon: LayoutDashboard },
     { id: 'items', label: 'Мои Объявления', icon: ShoppingBag },
-    { id: 'delivery', label: 'Авито Доставка & История', icon: Truck },
-    { id: 'campaigns', label: 'Кампании и ROI', icon: TrendingUp },
     { id: 'settings', label: 'Интеграция API', icon: Settings }
   ];
 
@@ -23,18 +21,14 @@ export default function Sidebar({ activeTab, setActiveTab, apiStatus, onOpenSett
       <nav className="nav-menu">
         {menuItems.map((item) => {
           const IconComponent = item.icon;
-          const isActive = activeTab === item.id;
           return (
             <button
               key={item.id}
-              className={`nav-item ${isActive ? 'active' : ''}`}
+              className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
               onClick={() => setActiveTab(item.id)}
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <IconComponent />
-                <span>{item.label}</span>
-              </div>
+              <IconComponent />
+              <span>{item.label}</span>
             </button>
           );
         })}
