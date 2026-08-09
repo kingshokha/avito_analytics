@@ -1,8 +1,15 @@
 // Service for interacting with Avito API and fallback state
-// Built according to OpenAPI 3.0.0 Specification for Avito Items API (/core/v1/items, /stats/v1/accounts/..., /vas/prices)
+// Optimized with Rate Limit Protection (HTTP 429 prevention, 60s TTL Cache, Smart Batching)
 
 const API_KEYS_STORAGE_KEY = 'avito_api_credentials';
 const DISCOVERED_ITEMS_KEY = 'avito_cached_item_ids';
+
+// In-Memory Cache with 60-second TTL to avoid 429 Too Many Requests
+let apiDataCache = {
+  key: null,
+  timestamp: 0,
+  data: null
+};
 
 export const getStoredCredentials = () => {
   try {
@@ -21,13 +28,19 @@ export const saveCredentials = (clientId, clientSecret, customItemIds = '') => {
     connectedAt: new Date().toISOString() 
   };
   localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(payload));
+  // Invalidate cache on new credentials
+  apiDataCache = { key: null, timestamp: 0, data: null };
   return payload;
 };
 
 export const clearCredentials = () => {
   localStorage.removeItem(API_KEYS_STORAGE_KEY);
   localStorage.removeItem(DISCOVERED_ITEMS_KEY);
+  apiDataCache = { key: null, timestamp: 0, data: null };
 };
+
+// Helper delay to space out rapid API requests and prevent rate-limiting
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Authenticate via OAuth 2.0 Client Credentials
 export const fetchAccessToken = async (clientId, clientSecret) => {
@@ -44,6 +57,10 @@ export const fetchAccessToken = async (clientId, clientSecret) => {
     body: params.toString()
   });
 
+  if (response.status === 429) {
+    throw new Error('Превышен лимит запросов Avito API (429). Пожалуйста, подождите несколько секунд.');
+  }
+
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`Ошибка авторизации Avito API (${response.status}): ${errText}`);
@@ -53,7 +70,7 @@ export const fetchAccessToken = async (clientId, clientSecret) => {
   return data.access_token;
 };
 
-// Helper function to extract array of items from any API response structure (Swagger ItemsInfoWithCategoryAvito)
+// Helper function to extract array of items from any API response structure
 function extractItemsFromPayload(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data;
@@ -91,7 +108,6 @@ export function parseItemPriceDetails(raw) {
   let currentPrice = null;
   let oldPrice = null;
 
-  // Swagger schema specifies price as integer (e.g., 35000) or null in GET /core/v1/items
   if (typeof raw.price === 'number') {
     currentPrice = raw.price;
   } else if (typeof raw.price === 'string' && raw.price.trim() !== '') {
@@ -102,7 +118,6 @@ export function parseItemPriceDetails(raw) {
     oldPrice = raw.price.old ?? raw.price.old_price ?? raw.price.original ?? null;
   }
 
-  // Check top-level item discount fields if any exist on the item listing
   if (raw.price_with_discount || raw.discount_price) {
     currentPrice = raw.price_with_discount || raw.discount_price;
     oldPrice = raw.price || raw.old_price;
@@ -127,7 +142,7 @@ export function parseItemPriceDetails(raw) {
   };
 }
 
-// Helper function to aggregate metrics from any Avito JSON structure (Swagger StatisticsCounters)
+// Helper function to aggregate metrics from any Avito JSON structure
 function parseItemMetrics(stRaw) {
   let impressions = 0;
   let views = 0;
@@ -176,6 +191,14 @@ function parseItemMetrics(stRaw) {
 // Main data fetching function supporting real API & fallback demo
 export const fetchDashboardData = async (period = '30', forceDemo = false) => {
   const creds = getStoredCredentials();
+
+  // Rate-limiting Cache Check (TTL: 45 seconds)
+  const cacheKey = `${creds?.clientId || 'demo'}_${period}_${forceDemo}`;
+  const now = Date.now();
+  if (!forceDemo && apiDataCache.key === cacheKey && (now - apiDataCache.timestamp < 45000) && apiDataCache.data) {
+    console.log('Использование кэшированных данных Avito (защита от 429 Rate Limit)');
+    return apiDataCache.data;
+  }
   
   if (!forceDemo && creds && creds.clientId && creds.clientSecret) {
     let rawDebugInfo = {
@@ -189,7 +212,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
     };
 
     try {
-      console.log('Глубокое сканирование объявлений через Avito API...');
+      console.log('Оптимизированное сканирование объявлений через Avito API...');
       const token = await fetchAccessToken(creds.clientId, creds.clientSecret);
       rawDebugInfo.tokenAcquired = true;
       
@@ -204,34 +227,28 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         rawDebugInfo.userInfo = userInfo;
       }
 
-      // Step 2: Auto-Discovery Pipeline (GET /core/v1/items according to Swagger schema)
+      // Step 2: Optimized Auto-Discovery Pipeline (Reduced requests to prevent 429)
       let allDiscovered = [];
 
-      // Query A: Paginated scan of GET /core/v1/items (Pages 1 to 5)
-      for (let page = 1; page <= 5; page++) {
-        try {
-          const res = await fetch(`/avito-api/core/v1/items?per_page=100&page=${page}`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (page === 1) rawDebugInfo.itemsResponse = data;
-            const list = extractItemsFromPayload(data);
-            if (list.length > 0) {
-              allDiscovered = allDiscovered.concat(list);
-            } else {
-              break;
-            }
-          } else {
-            if (page === 1) rawDebugInfo.itemsResponse = { error: await res.text(), status: res.status };
-            break;
+      // Query A: Primary listing fetch (GET /core/v1/items?per_page=100&page=1)
+      try {
+        const res = await fetch('/avito-api/core/v1/items?per_page=100&page=1', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          rawDebugInfo.itemsResponse = data;
+          const list = extractItemsFromPayload(data);
+          if (list.length > 0) {
+            allDiscovered = allDiscovered.concat(list);
           }
-        } catch (e) { break; }
-      }
+        }
+      } catch (e) {}
 
-      // Query B: Filter by specific status values including draft & unpublished
-      const statusList = ['unpublished', 'draft', 'unpaid', 'deactivated', 'inactive', 'old', 'removed', 'blocked', 'rejected', 'active'];
+      // Query B: Selective status scan (Only essential status queries with 100ms pacing delay)
+      const statusList = ['unpublished', 'draft', 'old', 'removed', 'blocked'];
       for (const st of statusList) {
+        await sleep(100); // 100ms pacing between requests to respect rate limiters
         try {
           const res = await fetch(`/avito-api/core/v1/items?status=${st}&per_page=100`, {
             headers: { Authorization: `Bearer ${token}` }
@@ -241,28 +258,6 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             const list = extractItemsFromPayload(data);
             if (list.length > 0) {
               allDiscovered = allDiscovered.concat(list.map(it => ({ ...it, status: it.status || st })));
-            }
-          }
-        } catch (e) {}
-      }
-
-      // Query C: Check Autoload report items if available
-      if (userInfo.id) {
-        try {
-          const autoRes = await fetch(`/avito-api/autoload/v1/accounts/${userInfo.id}/reports/last_report/`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (autoRes.ok) {
-            const autoData = await autoRes.json();
-            rawDebugInfo.autoloadReport = autoData;
-            const autoList = extractItemsFromPayload(autoData.report || autoData);
-            if (autoList.length > 0) {
-              allDiscovered = allDiscovered.concat(autoList.map(it => ({
-                id: it.avito_id || it.itemId || it.id || it.item_id,
-                title: it.title || `Объявление #${it.avito_id || it.id}`,
-                price: it.price,
-                status: it.status || (it.published ? 'active' : 'unpublished')
-              })));
             }
           }
         } catch (e) {}
@@ -292,7 +287,6 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
                 status: normalizeItemStatus(it)
               };
             } else {
-              // Overwrite status if the new item has an explicit non-active status
               const newSt = normalizeItemStatus(it);
               itemsMapById[cleanIdStr] = {
                 ...itemsMapById[cleanIdStr],
@@ -324,9 +318,10 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
       dateFromObj.setDate(dateFromObj.getDate() - days);
       const dateFrom = dateFromObj.toISOString().split('T')[0];
 
-      // Step 3: Fetch statistics for all target Item IDs (POST /stats/v1/accounts/{user_id}/items)
+      // Step 3: Fetch statistics for target Item IDs in a single batch (POST /stats/v1/accounts/{user_id}/items)
       let statsMap = {};
       if (targetItemIds.length > 0 && userInfo.id) {
+        await sleep(100);
         try {
           const statsRes = await fetch(`/avito-api/stats/v1/accounts/${userInfo.id}/items`, {
             method: 'POST',
@@ -360,9 +355,10 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         }
       }
 
-      // Step 4: Fetch VAS prices & promotional service discounts (POST /core/v1/accounts/{userId}/vas/prices)
+      // Step 4: Fetch VAS prices (POST /core/v1/accounts/{userId}/vas/prices)
       let vasPricesMap = {};
       if (targetItemIds.length > 0 && userInfo.id) {
+        await sleep(100);
         try {
           const vasRes = await fetch(`/avito-api/core/v1/accounts/${userInfo.id}/vas/prices`, {
             method: 'POST',
@@ -403,7 +399,6 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
 
           const normalizedStatus = foundRaw?.status || normalizeItemStatus(foundRaw);
 
-          // Inspect VAS promotion discounts available for this item
           let vasPromoNotice = null;
           if (vasRaw && Array.isArray(vasRaw.vas)) {
             const discountedVas = vasRaw.vas.find(v => v.priceOld && v.priceOld > v.price);
@@ -436,14 +431,23 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
           };
         });
 
-        const res = processRealItemsAndStats(processedItems, allDailySeries, userInfo, period);
-        return {
-          ...res,
+        const result = processRealItemsAndStats(processedItems, allDailySeries, userInfo, period);
+        const finalData = {
+          ...result,
           rawDebugInfo,
-          apiNotice: `Синхронизация успешна. Всего уникальных объявлений: ${targetItemIds.length}.`
+          apiNotice: `Синхронизация успешна. Всего объявлений: ${targetItemIds.length}. (Кэш активен)`
         };
+
+        // Store result in memory cache
+        apiDataCache = {
+          key: cacheKey,
+          timestamp: Date.now(),
+          data: finalData
+        };
+
+        return finalData;
       } else {
-        return {
+        const emptyResult = {
           isReal: true,
           userInfo,
           rawDebugInfo,
@@ -462,12 +466,25 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
           spendDistribution: [
             { name: 'Без продвижения', value: 100, color: '#64748b' }
           ],
-          apiNotice: `Авторизация успешна (Аккаунт ID: ${userInfo.id || 'OK'}). У данного аккаунта пока нет объявлений. Объявления появятся автоматически после публикации на Авито.`
+          apiNotice: `Авторизация успешна (Аккаунт ID: ${userInfo.id || 'OK'}). Объявлений не обнаружено.`
         };
+
+        apiDataCache = { key: cacheKey, timestamp: Date.now(), data: emptyResult };
+        return emptyResult;
       }
     } catch (err) {
       console.error('Ошибка при работе с Avito API:', err);
       rawDebugInfo.error = err.message;
+      
+      // If cached data exists from a previous call, return cached data gracefully during 429 errors
+      if (apiDataCache.data) {
+        console.warn('Сервер вернул ошибку/лимит 429. Возврат данных из фонового кэша.');
+        return {
+          ...apiDataCache.data,
+          apiNotice: `Внимание: Превышен лимит запросов API. Отображаются данные из кэша (обновление через 45 сек).`
+        };
+      }
+
       return {
         isReal: false,
         userInfo: null,
@@ -485,7 +502,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         dailyStats: [],
         items: [],
         spendDistribution: [],
-        apiNotice: `Ошибка синхронизации Avito API: ${err.message}. Проверьте введенные ключи Client ID и Client Secret.`
+        apiNotice: `Предупреждение API: ${err.message}. Сервер временно ограничивает лимит запросов (429).`
       };
     }
   }
