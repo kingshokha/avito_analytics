@@ -64,9 +64,29 @@ function extractItemsFromPayload(data) {
   return [];
 }
 
+// Helper function to normalize status strictly
+function normalizeItemStatus(foundRaw) {
+  if (!foundRaw) return 'active';
+
+  const rawSt = String(foundRaw.status || foundRaw.item_status || foundRaw.state || '').toLowerCase().trim();
+
+  if (['old', 'archive', 'archived'].includes(rawSt)) return 'old';
+  if (['removed', 'deleted'].includes(rawSt)) return 'removed';
+  if (['blocked', 'rejected', 'banned'].includes(rawSt)) return 'blocked';
+  if (['draft', 'unpublished', 'not_published', 'deactivated', 'inactive', 'closed', 'unpaid'].includes(rawSt)) return 'unpublished';
+  
+  if (foundRaw.is_active === false || foundRaw.active === false || foundRaw.published === false) {
+    return 'unpublished';
+  }
+
+  if (['active', 'published', 'promo'].includes(rawSt)) return 'active';
+
+  return rawSt || 'active';
+}
+
 // Helper function to parse item price directly from GET /core/v1/items according to Swagger schema
 export function parseItemPriceDetails(raw) {
-  if (!raw) return { price: 0, formatted: 'Договорная', oldPrice: null, hasDiscount: false, discountPercent: 0 };
+  if (!raw) return { price: 0, formatted: 'Бесплатно', oldPrice: null, hasDiscount: false, discountPercent: 0 };
 
   let currentPrice = null;
   let oldPrice = null;
@@ -91,7 +111,7 @@ export function parseItemPriceDetails(raw) {
   }
 
   if (currentPrice === null || currentPrice === undefined || currentPrice === 0) {
-    return { price: 0, formatted: 'Договорная', oldPrice: null, hasDiscount: false, discountPercent: 0 };
+    return { price: 0, formatted: 'Бесплатно', oldPrice: null, hasDiscount: false, discountPercent: 0 };
   }
 
   const numCurrent = Number(currentPrice);
@@ -209,8 +229,8 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
         } catch (e) { break; }
       }
 
-      // Query B: Filter by specific status values
-      const statusList = ['active', 'old', 'removed', 'blocked', 'rejected'];
+      // Query B: Filter by specific status values including draft & unpublished
+      const statusList = ['unpublished', 'draft', 'unpaid', 'deactivated', 'inactive', 'old', 'removed', 'blocked', 'rejected', 'active'];
       for (const st of statusList) {
         try {
           const res = await fetch(`/avito-api/core/v1/items?status=${st}&per_page=100`, {
@@ -220,7 +240,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             const data = await res.json();
             const list = extractItemsFromPayload(data);
             if (list.length > 0) {
-              allDiscovered = allDiscovered.concat(list);
+              allDiscovered = allDiscovered.concat(list.map(it => ({ ...it, status: it.status || st })));
             }
           }
         } catch (e) {}
@@ -240,7 +260,8 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
               allDiscovered = allDiscovered.concat(autoList.map(it => ({
                 id: it.avito_id || it.itemId || it.id || it.item_id,
                 title: it.title || `Объявление #${it.avito_id || it.id}`,
-                price: it.price
+                price: it.price,
+                status: it.status || (it.published ? 'active' : 'unpublished')
               })));
             }
           }
@@ -256,18 +277,30 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
           .filter(Boolean);
       }
 
-      // STRICT DEDUPLICATION BY NORMALIZED NUMERIC ID
+      // STRICT DEDUPLICATION AND STATUS OVERWRITE FOR ACCURATE MERGING
       const itemsMapById = {};
       allDiscovered.forEach(it => {
         if (!it) return;
         const rawId = it.id || it.itemId || it.avito_id || it.item_id;
         if (rawId) {
           const cleanIdStr = String(rawId).replace(/\D/g, '');
-          if (cleanIdStr && !itemsMapById[cleanIdStr]) {
-            itemsMapById[cleanIdStr] = {
-              ...it,
-              id: Number(cleanIdStr)
-            };
+          if (cleanIdStr) {
+            if (!itemsMapById[cleanIdStr]) {
+              itemsMapById[cleanIdStr] = {
+                ...it,
+                id: Number(cleanIdStr),
+                status: normalizeItemStatus(it)
+              };
+            } else {
+              // Overwrite status if the new item has an explicit non-active status
+              const newSt = normalizeItemStatus(it);
+              itemsMapById[cleanIdStr] = {
+                ...itemsMapById[cleanIdStr],
+                ...it,
+                id: Number(cleanIdStr),
+                status: (newSt && newSt !== 'active') ? newSt : itemsMapById[cleanIdStr].status
+              };
+            }
           }
         }
       });
@@ -368,6 +401,8 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             allDailySeries = allDailySeries.concat(daily);
           }
 
+          const normalizedStatus = foundRaw?.status || normalizeItemStatus(foundRaw);
+
           // Inspect VAS promotion discounts available for this item
           let vasPromoNotice = null;
           if (vasRaw && Array.isArray(vasRaw.vas)) {
@@ -384,6 +419,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             title: foundRaw?.title || `Объявление #${id}`,
             category: foundRaw?.category?.name || 'Товары / Сервисы',
             price: priceInfo.formatted,
+            rawPrice: priceInfo.price,
             oldPrice: priceInfo.oldPrice,
             hasDiscount: priceInfo.hasDiscount,
             discountPercent: priceInfo.discountPercent,
@@ -393,7 +429,7 @@ export const fetchDashboardData = async (period = '30', forceDemo = false) => {
             favorites: favorites || 0,
             spend: spend || Number(foundRaw?.spend ?? foundRaw?.expenses ?? 0),
             ctr: (views > 0) ? `${((contacts / views) * 100).toFixed(1)}%` : '0%',
-            status: foundRaw?.status || 'active',
+            status: normalizedStatus,
             service: spend > 0 ? 'Платная услуга Авито' : 'Без продвижения',
             vasPromoNotice,
             img: foundRaw?.url || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=150&auto=format&fit=crop&q=80'
@@ -515,7 +551,7 @@ function processRealItemsAndStats(items, allDailySeries, userInfo, period) {
     kpis: {
       impressions: { value: totalImpressions, trend: 'Авто-синхронизация', isPositive: true },
       views: { value: totalViews, trend: 'Авто-синхронизация', isPositive: true },
-      contacts: { value: totalContacts, trend: 'Авто-синхронизация', isPositive: true },
+      contacts: { value: totalFavorites, trend: 'Авто-синхронизация', isPositive: true },
       favorites: { value: totalFavorites, trend: 'Авто-синхронизация', isPositive: true },
       spend: { value: `${totalSpend.toLocaleString('ru-RU')} ₽`, trend: 'Авто-синхронизация', isPositive: true },
       cpl: { value: `${cpl} ₽`, trend: 'Авто-синхронизация', isPositive: true },
@@ -601,9 +637,11 @@ function generateMockData(period = '30') {
   const items = [
     {
       id: 'av-904128',
+      numericId: 904128,
       title: 'iPhone 15 Pro Max 256GB Titanium',
       category: 'Электроника',
       price: '114 990 ₽',
+      rawPrice: 114990,
       oldPrice: null,
       hasDiscount: false,
       discountPercent: 0,
@@ -618,9 +656,11 @@ function generateMockData(period = '30') {
     },
     {
       id: 'av-882310',
+      numericId: 882310,
       title: 'Игровой ПК Core i7 13700KF / RTX 4080',
       category: 'Компьютеры',
       price: '189 000 ₽',
+      rawPrice: 189000,
       oldPrice: null,
       hasDiscount: false,
       discountPercent: 0,
@@ -635,9 +675,11 @@ function generateMockData(period = '30') {
     },
     {
       id: 'av-773412',
+      numericId: 773412,
       title: 'Аренда 2-к квартиры 65м² (Центр)',
       category: 'Недвижимость',
       price: '65 000 ₽/мес',
+      rawPrice: 65000,
       oldPrice: null,
       hasDiscount: false,
       discountPercent: 0,
@@ -646,15 +688,17 @@ function generateMockData(period = '30') {
       contacts: 245,
       spend: 6800,
       ctr: '10.6%',
-      status: 'promo',
-      service: 'Выделение + X10',
+      status: 'unpublished',
+      service: 'Черновик',
       img: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=150&auto=format&fit=crop&q=80'
     },
     {
       id: 'av-661294',
+      numericId: 661294,
       title: 'Беспроводные наушники Sony WH-1000XM5',
       category: 'Электроника',
       price: '28 500 ₽',
+      rawPrice: 28500,
       oldPrice: null,
       hasDiscount: false,
       discountPercent: 0,
@@ -663,15 +707,17 @@ function generateMockData(period = '30') {
       contacts: 42,
       spend: 1200,
       ctr: '6.5%',
-      status: 'active',
-      service: 'Без продвижения',
+      status: 'unpublished',
+      service: 'Неопубликованное',
       img: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=150&auto=format&fit=crop&q=80'
     },
     {
       id: 'av-551029',
+      numericId: 551029,
       title: 'Офисный стол Лофт из массива дуба',
       category: 'Мебель',
       price: '34 000 ₽',
+      rawPrice: 34000,
       oldPrice: null,
       hasDiscount: false,
       discountPercent: 0,
@@ -697,7 +743,7 @@ function generateMockData(period = '30') {
     kpis: {
       impressions: { value: totalImpressions, trend: '+21.0%', isPositive: true },
       views: { value: totalViews, trend: '+14.2%', isPositive: true },
-      contacts: { value: totalContacts, trend: '+18.5%', isPositive: true },
+      contacts: { value: totalFavorites, trend: '+18.5%', isPositive: true },
       favorites: { value: totalFavorites, trend: '+9.1%', isPositive: true },
       spend: { value: `${totalSpend.toLocaleString('ru-RU')} ₽`, trend: '-4.8%', isPositive: true },
       cpl: { value: `${cpl} ₽`, trend: '-12.0%', isPositive: true },
